@@ -255,7 +255,12 @@ def _win_native_ok(path):
         return True
 
 def _run(cmd, timeout):
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    # Ép child in UTF-8 + đọc UTF-8 -> tránh UnicodeError khi đường dẫn có dấu tiếng Việt
+    # (console Windows mặc định cp1252). Đây từng khiến chatgpt-imagegen gen xong nhưng
+    # crash lúc print(out_path) -> bị coi là lỗi -> fallback nhầm sang OpenArt.
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                       env=env, encoding="utf-8", errors="replace")
     if p.returncode != 0:
         raise RuntimeError(p.stderr.strip() or p.stdout.strip() or f"rc={p.returncode}")
 

@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 REM Khoi dong Flat Studio: server web + autoupdate git + mo trinh duyet.
 cd /d "%~dp0"
 call "%~dp0_env.bat"

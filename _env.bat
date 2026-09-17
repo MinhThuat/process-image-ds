@@ -1,4 +1,8 @@
 @echo off
+REM Ep Python chay UTF-8 -> tranh crash khi in duong dan co dau tieng Viet (vd THUY/Ủ)
+REM tren console cp1252. Lan truyen: server -> pipeline -> chatgpt-imagegen deu thua huong.
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
 REM Nap tools portable da tai (neu co) vao PATH cho phien hien tai.
 REM Duoc `call` tu setup.bat va start.bat. May da co san python/node/git thi khong lam gi.
 set "TOOLS=%USERPROFILE%\dsds_studio\tools"
