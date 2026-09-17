@@ -38,7 +38,8 @@ def log(stage, msg=""):
     if _LOGF:
         _LOGF.write(line + "\n"); _LOGF.flush()
 
-EMIT = None  # nếu set: crop/panel/final ghi thẳng vào thư mục này (cho UI web poll)
+EMIT = None   # nếu set: crop/panel/final ghi thẳng vào thư mục này (cho UI web poll)
+SCALE = 1.0   # hệ số phóng canvas ghép (1=2400x1900, 2=4800x3800, 3=7200x5700)
 
 def _workdir(prefix, sub=""):
     """Thư mục làm việc: dùng EMIT (được serve) nếu có, không thì temp."""
@@ -237,17 +238,20 @@ def _place(cv, img, box):
     x0, y0, x1, y1 = box; im = _fit(img, x1 - x0, y1 - y0)
     cv.alpha_composite(im, (x0 + (x1 - x0 - im.width) // 2, y0 + (y1 - y0 - im.height) // 2))
 
-def assemble(panels, out):
-    W, H = 2400, 1900
+def assemble(panels, out, scale=None):
+    s = scale or SCALE or 1.0
+    def S(v): return int(round(v * s))
+    def box(b): return tuple(S(x) for x in b)
+    W, H = S(2400), S(1900)
     cv = Image.new("RGBA", (W, H), BG + (255,)); d = ImageDraw.Draw(cv)
     for i in range(2):
         y = 55 + i * 70
-        d.rectangle([70, y, W - 70, y + 46], fill=(255, 255, 255, 255),
-                    outline=(150, 150, 150, 255), width=2)
-    _place(cv, cutout(panels["skirt_front"]), (40, 200, 1200, 900))
-    _place(cv, cutout(panels["skirt_back"]),  (40, 960, 1200, 1660))
-    _place(cv, cutout(panels["bodice_front"]), (1280, 300, 2340, 830))
-    _place(cv, cutout(panels["bodice_back"]),  (1280, 980, 2340, 1510))
+        d.rectangle(box([70, y, 2400 - 70, y + 46]), fill=(255, 255, 255, 255),
+                    outline=(150, 150, 150, 255), width=max(1, S(2)))
+    _place(cv, cutout(panels["skirt_front"]), box((40, 200, 1200, 900)))
+    _place(cv, cutout(panels["skirt_back"]),  box((40, 960, 1200, 1660)))
+    _place(cv, cutout(panels["bodice_front"]), box((1280, 300, 2340, 830)))
+    _place(cv, cutout(panels["bodice_back"]),  box((1280, 980, 2340, 1510)))
     cv.convert("RGB").save(out)
     return out
 
@@ -361,6 +365,7 @@ if __name__ == "__main__":
     ap.add_argument("-o", "--out", default="flat_out.png")
     ap.add_argument("--log", help="file ghi log (mặc định: <out>.log cạnh output)")
     ap.add_argument("--emit", help="ghi crop/panel/final vào thư mục này (cho UI web poll)")
+    ap.add_argument("--scale", type=float, default=1.0, help="phóng cỡ ghép (1/2/3)")
     ap.add_argument("--selfcheck", action="store_true")
     a = ap.parse_args()
     if a.selfcheck:
@@ -368,6 +373,7 @@ if __name__ == "__main__":
     elif a.front:
         if a.emit:
             globals()["EMIT"] = a.emit
+        globals()["SCALE"] = max(0.5, min(4.0, a.scale))
         out = Path(a.out)
         logpath = _open_log(a.log or out.with_suffix(".log"))
         log("start", f"log -> {logpath}")

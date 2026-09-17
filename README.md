@@ -34,6 +34,13 @@ git remote add origin <URL-REPO>
 ```
 Có code mới → app hiện nút **Restart**. Dữ liệu (ảnh) nằm ở `%USERPROFILE%\dsds_studio\` (ngoài repo) nên reset an toàn.
 
-## Dữ liệu
-- Ảnh upload: `~/dsds_studio/uploads/`
-- Kết quả từng lần chạy: `~/dsds_studio/runs/<timestamp>/` (crop_*, panel_*, final.png, run.log)
+## Dữ liệu (NGOÀI folder studio)
+Mặc định nằm cạnh studio (cùng folder cha): `../flat_studio_data/`
+- Ảnh upload: `flat_studio_data/uploads/`
+- Kết quả mỗi lần chạy: `flat_studio_data/runs/<timestamp>/` (crop_*, panel_*, final.png, run.log)
+
+Đổi chỗ khác: đặt biến môi trường `STUDIO_DATA=D:\duong\dan\folder` trước khi chạy (hoặc thêm vào start.bat).
+Để ngoài repo nên autoupdate `git reset --hard` không đụng tới.
+
+## Mở thư mục nhanh
+Bấm vào bất kỳ ảnh nào trên bàn cắt (mảnh crop, panel, hay thành phẩm) → mở thẳng thư mục chứa ảnh đó bằng File Explorer.

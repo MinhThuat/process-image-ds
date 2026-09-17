@@ -14,7 +14,9 @@ from aiohttp import web
 
 ROOT = Path(__file__).resolve().parent
 HOME = Path(os.path.expanduser("~"))
-DATA = HOME / "dsds_studio"
+# Dữ liệu KHÔNG nằm trong studio: mặc định folder cạnh studio (cùng folder cha),
+# hoặc override bằng env STUDIO_DATA=<đường dẫn folder tùy chọn>.
+DATA = Path(os.getenv("STUDIO_DATA", ROOT.parent / "flat_studio_data")).expanduser()
 RUNS = DATA / "runs"
 UPLOADS = DATA / "uploads"
 RUNS.mkdir(parents=True, exist_ok=True); UPLOADS.mkdir(parents=True, exist_ok=True)
@@ -49,6 +51,24 @@ async def media(request):
 
 
 IMG_CT = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}
+
+async def reveal(request):
+    """Mở thư mục chứa ảnh bằng file manager của HĐH (chỉ trong data/)."""
+    p = Path(os.path.realpath(request.query.get("p", "")))
+    if not (str(p).startswith(str(RUNS)) or str(p).startswith(str(UPLOADS))) or not p.exists():
+        return web.json_response({"error": "not found"}, status=404)
+    d = str(p.parent)
+    try:
+        if sys.platform == "win32":
+            os.startfile(d)                                    # noqa: Windows Explorer
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", d])
+        else:
+            subprocess.Popen(["xdg-open", d])
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"ok": True})
+
 
 async def upload(request):
     reader = await request.multipart()
@@ -104,9 +124,10 @@ async def run(request):
         return web.json_response({"error": "chưa có ảnh front"}, status=400)
     rid = time.strftime("%Y%m%d-%H%M%S")
     rundir = RUNS / rid; rundir.mkdir(parents=True, exist_ok=True)
+    scale = body.get("scale", 1)
     cmd = [sys.executable, str(PIPELINE), "--front", front,
            "-o", str(rundir / "final.png"), "--emit", str(rundir),
-           "--log", str(rundir / "run.log")]
+           "--log", str(rundir / "run.log"), "--scale", str(scale)]
     if mode == "back" and back:
         cmd += ["--back", back]
     elif mode == "twoviews":
@@ -118,21 +139,24 @@ async def run(request):
     return web.json_response({"run": rid})
 
 
+def _item(p, name):
+    from urllib.parse import quote
+    return {"src": "/media?p=" + quote(str(p)), "path": str(p), "name": name}
+
 def _list_images(rundir: Path):
-    """Trả về ảnh theo nhóm để UI xếp lên canvas."""
-    def rel(p): return f"/media?p={p}"
+    """Trả về ảnh theo nhóm để UI xếp lên canvas (kèm path thật để mở thư mục)."""
     groups = {"crop": [], "panel": [], "final": []}
     # gộp cả run trực tiếp lẫn các thư mục con person_* (mode multi)
     for base in [rundir] + sorted(rundir.glob("person_*")):
         tag = base.name if base != rundir else ""
         for c in sorted(base.glob("crop_*.png")):
-            groups["crop"].append({"src": rel(c), "name": (tag + " " + c.stem).strip()})
+            groups["crop"].append(_item(c, (tag + " " + c.stem).strip()))
         for name in PANELS:
             f = base / f"panel_{name}.png"
             if f.exists():
-                groups["panel"].append({"src": rel(f), "name": (tag + " " + name).strip()})
+                groups["panel"].append(_item(f, (tag + " " + name).strip()))
     for f in sorted(rundir.glob("**/final*.png")):
-        groups["final"].append({"src": rel(f), "name": f.stem})
+        groups["final"].append(_item(f, f.stem))
     return groups
 
 
@@ -191,7 +215,7 @@ def main():
     app = web.Application(client_max_size=64 * 1024 * 1024)
     app["boot_mtime"] = _src_mtime()
     app.add_routes([
-        web.get("/", index), web.get("/media", media),
+        web.get("/", index), web.get("/media", media), web.get("/reveal", reveal),
         web.post("/upload", upload), web.post("/fetch_url", fetch_url),
         web.post("/run", run), web.get("/state", state),
         web.get("/codex/status", codex_status), web.post("/codex/login", codex_login),
