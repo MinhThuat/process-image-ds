@@ -26,7 +26,7 @@ python -m pip install "aiohttp>=3.9" pillow numpy opencv-python-headless scipy "
  || python -m pip install --user "aiohttp>=3.9" pillow numpy opencv-python-headless scipy "openai>=1.0" python-dotenv
 
 echo == 5. codex (npm global) ==
-where codex >nul 2>&1 && echo   da co codex || npm install -g @openai/codex
+where codex >nul 2>&1 && echo   da co codex || call npm install -g @openai/codex
 
 echo == 6. Gen chinh: chatgpt-imagegen (script python, chay qua python) ==
 if exist "%~dp0bin\chatgpt-imagegen" (echo   OK: bin\chatgpt-imagegen) else (echo   !! Thieu bin\chatgpt-imagegen - copy script python vao thu muc bin\)
@@ -57,11 +57,13 @@ if exist "%USERPROFILE%\.codex\auth.json" (
   echo   OK: da dang nhap codex
 ) else (
   echo   Mo dang nhap ChatGPT/codex trong trinh duyet. Hoan tat roi quay lai...
-  where codex >nul 2>&1 && codex login
+  where codex >nul 2>&1 && call codex login
 )
 
 echo.
 echo XONG. Chay:  start.bat
+echo.
+pause
 goto :eof
 
 :getpython
@@ -78,7 +80,7 @@ call :dl "https://nodejs.org/dist/v22.11.0/node-v22.11.0-win-x64.zip" "%TEMP%\ds
 tar -xf "%TEMP%\dsds_node.zip" -C "%TOOLS%" & del "%TEMP%\dsds_node.zip" 2>nul
 if exist "%TOOLS%\node" rmdir /s /q "%TOOLS%\node"
 move "%TOOLS%\node-v22.11.0-win-x64" "%TOOLS%\node" >nul
-"%TOOLS%\node\npm.cmd" config set prefix "%TOOLS%\node" >nul 2>&1
+call "%TOOLS%\node\npm.cmd" config set prefix "%TOOLS%\node" >nul 2>&1
 echo   Node -^> %TOOLS%\node
 goto :eof
 
