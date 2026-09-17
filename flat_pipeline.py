@@ -78,17 +78,34 @@ SHAPE_FAN = (" Shape: a wide quarter-circle CIRCLE-SKIRT fan panel spread flat l
 
 
 # ---------- 1. dola-seed vision: bbox + mô tả ----------
-def _ark_client():
+def _ark_keys():
+    """Nhiều key -> vision chạy song song thật (ARK serialize theo key). Nạp từ
+    ARK_API_KEYS='k1,k2,...' và/hoặc ARK_API_KEY, ARK_API_KEY2, ARK_API_KEY3..."""
     try:
         from dotenv import load_dotenv
         load_dotenv(ENV_FILE)
     except Exception:
         pass
-    key = os.getenv("ARK_API_KEY")
-    if not key:
+    keys = []
+    for k in (os.getenv("ARK_API_KEYS") or "").split(","):
+        k = k.strip()
+        if k and k not in keys:
+            keys.append(k)
+    for name in ("ARK_API_KEY", "ARK_API_KEY2", "ARK_API_KEY3", "ARK_API_KEY4"):
+        v = os.getenv(name)
+        if v and v not in keys:
+            keys.append(v)
+    return keys
+
+def _ark_clients():
+    keys = _ark_keys()
+    if not keys:
         sys.exit("Thiếu ARK_API_KEY (env hoặc chatgpt-api/.env).")
     from openai import OpenAI
-    return OpenAI(api_key=key, base_url=ARK_BASE)
+    return [OpenAI(api_key=k, base_url=ARK_BASE) for k in keys]
+
+def _ark_client():
+    return _ark_clients()[0]
 
 def _data_uri(p):
     mime = mimetypes.guess_type(p)[0] or "image/jpeg"
@@ -122,14 +139,19 @@ VISION_PROMPT = (
     "flat vector panel. No prose, just the spec.")
 
 def _vision(client, img, prompt, need=()):
-    """Gọi vision với fallback qua VMODELS, log từng lần thử. `need` = key bắt buộc trong JSON."""
+    """Gọi vision với fallback qua VMODELS, log từng lần thử. `need` = key bắt buộc trong JSON.
+    `img` là 1 đường dẫn HOẶC list nhiều đường dẫn (gộp vào 1 request — ARK serialize
+    theo key nên 1 request 2 ảnh nhanh hơn 2 request rời)."""
+    imgs = img if isinstance(img, (list, tuple)) else [img]
+    content = [{"type": "text", "text": prompt}]
+    for i in imgs:
+        content.append({"type": "image_url", "image_url": {"url": _vision_uri(i)}})
     last = None
     for m in VMODELS:
         try:
             log("vision", f"thử model {m} ...")
-            r = client.chat.completions.create(model=m, messages=[{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": _vision_uri(img)}}]}])
+            r = client.chat.completions.create(model=m,
+                messages=[{"role": "user", "content": content}])
             js = json.loads(re.search(r"\{.*\}", r.choices[0].message.content, re.S).group())
             for k in need:
                 if k not in js:
@@ -145,6 +167,22 @@ def seed_vision(client, img):
     w, h = Image.open(img).size
     js, m = _vision(client, img, VISION_PROMPT, need=("bodice", "skirt"))
     return js, (w, h), m
+
+TWO_IMG_PROMPT = (
+    "You are given TWO separate photos of the SAME skater/skirt dress: the FIRST image is the "
+    "FRONT view, the SECOND image is the BACK view. Return ONLY JSON: "
+    '{"front":{"bodice":{"box":[x0,y0,x1,y1],"desc":"..."},"skirt":{"box":[..],"desc":".."}},'
+    '"back":{"bodice":{"box":[..],"desc":".."},"skirt":{"box":[..],"desc":".."}}}. '
+    "box = bounding box of that part WITHIN THAT image, integers normalized 0-1000 (x from left, "
+    "y from top). bodice = top/torso panel (neckline to waist, exclude head/arms/background); "
+    "skirt = flared part below the waist (exclude legs/background). desc = concise flat-technical "
+    "spec of the PRINTED GRAPHIC on that part (colors as words, bands top-to-bottom, motifs and "
+    "positions) to redraw as a flat vector panel. No prose, just the spec.")
+
+def seed_two_images(client, front, back):
+    """Gộp front+back vào 1 request (tránh ARK serialize 2 request rời)."""
+    js, m = _vision(client, [front, back], TWO_IMG_PROMPT, need=("front", "back"))
+    return js, m
 
 PEOPLE_PROMPT = (
     "This photo shows several people standing in a row, each wearing a dress. Return ONLY JSON "
@@ -338,24 +376,39 @@ def _gen_assemble(work, bcf, bcb, scf, scb, dbf, dbb, dsf, dsb, out):
 
 def run(front, back, out, emit_sub=""):
     log("start", f"1 váy | front={Path(front).name}" + (f" back={Path(back).name}" if back else " (tự suy mặt sau)"))
-    client = _ark_client()
+    clients = _ark_clients()
+    client = clients[0]
     work = _workdir("flat_", emit_sub)
     log("setup", f"workdir {work}")
 
-    def process(img, side):
+    def process(img, side, cl=None):
         log("crop", f"{side}: nhìn ảnh ...")
-        js, wh, m = seed_vision(client, img)
+        js, wh, m = seed_vision(cl or client, img)
         log("crop", f"{side}: bodice {js['bodice']['box']} skirt {js['skirt']['box']}")
         bc = work / f"crop_bodice_{side}.png"; sc = work / f"crop_skirt_{side}.png"
         crop_norm(img, js["bodice"]["box"], wh, bc)
         crop_norm(img, js["skirt"]["box"],  wh, sc)
         return js, bc, sc
 
-    if back:  # nhìn 2 ảnh song song cho nhanh
+    if back and len(clients) >= 2:  # ≥2 key -> nhìn front/back SONG SONG thật (mỗi key 1 ảnh)
+        log("crop", f"nhìn 2 ảnh song song trên {len(clients)} key ...")
         with ThreadPoolExecutor(max_workers=2) as ex:
-            ff = ex.submit(process, front, "front"); fb = ex.submit(process, back, "back")
-            jf, bcf, scf = ff.result(); jb, bcb, scb = fb.result()
+            ff = ex.submit(process, front, "front", clients[0])
+            fbk = ex.submit(process, back, "back", clients[1])
+            jf, bcf, scf = ff.result(); jb, bcb, scb = fbk.result()
         bdesc_b, sdesc_b = jb["bodice"]["desc"], jb["skirt"]["desc"]
+    elif back:  # 1 key -> gộp front+back vào 1 request (ARK serialize theo key)
+        log("crop", "nhìn cả 2 ảnh (1 request) ...")
+        js, m = seed_two_images(client, front, back)
+        fb, bb = js["front"], js["back"]
+        wf = Image.open(front).size; wb = Image.open(back).size
+        log("crop", f"front bodice {fb['bodice']['box']} | back bodice {bb['bodice']['box']}")
+        bcf = work / "crop_bodice_front.png"; scf = work / "crop_skirt_front.png"
+        bcb = work / "crop_bodice_back.png";  scb = work / "crop_skirt_back.png"
+        crop_norm(front, fb["bodice"]["box"], wf, bcf); crop_norm(front, fb["skirt"]["box"], wf, scf)
+        crop_norm(back,  bb["bodice"]["box"], wb, bcb); crop_norm(back,  bb["skirt"]["box"], wb, scb)
+        jf = fb
+        bdesc_b, sdesc_b = bb["bodice"]["desc"], bb["skirt"]["desc"]
     else:  # không có ảnh sau -> tái dùng crop trước, mô tả "plain back"
         jf, bcf, scf = process(front, "front")
         bcb, scb = bcf, scf
