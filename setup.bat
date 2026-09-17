@@ -28,23 +28,29 @@ python -m pip install "aiohttp>=3.9" pillow numpy opencv-python-headless scipy "
 echo == 5. codex (npm global) ==
 where codex >nul 2>&1 && echo   da co codex || npm install -g @openai/codex
 
-echo == 6. Binary gen cho Windows (bin\) ==
-if exist "%~dp0bin\chatgpt-imagegen.exe" (echo   OK: chatgpt-imagegen.exe) else (echo   !! Thieu bin\chatgpt-imagegen.exe - dat ban Windows vao thu muc bin\)
-if exist "%~dp0bin\openart.exe" (echo   OK: openart.exe) else (echo   !! Thieu bin\openart.exe - dat ban Windows vao thu muc bin\  ^(fallback^))
+echo == 6. Gen chinh: chatgpt-imagegen (script python, chay qua python) ==
+if exist "%~dp0bin\chatgpt-imagegen" (echo   OK: bin\chatgpt-imagegen) else (echo   !! Thieu bin\chatgpt-imagegen - copy script python vao thu muc bin\)
 
 echo == 7. .env (ARK_API_KEY cho dola-seed) ==
 if exist "%~dp0.env" (
   findstr /b /c:"ARK_API_KEY=" "%~dp0.env" >nul 2>&1 && (echo   OK: co ARK_API_KEY) || (echo   !! .env chua co dong ARK_API_KEY=ark-...)
 ) else (echo   !! Chua co .env - tao file .env voi dong:  ARK_API_KEY=ark-...)
 
-echo == 8. Dang nhap OpenArt (fallback gen) ==
-set "OA=%~dp0bin\openart.exe"
-if not exist "%OA%" set "OA=openart"
-where "%OA%" >nul 2>&1 || if not exist "%~dp0bin\openart.exe" (echo   !! Chua co openart - bo qua buoc dang nhap OpenArt) & goto :skipoa
-echo   Mo dang nhap OpenArt trong trinh duyet. Hoan tat dang nhap roi quay lai day...
-"%OA%" login
-echo   ^(da xong OpenArt^)
-:skipoa
+echo == 8. OpenArt CLI (fallback) - tai ban Windows + dang nhap ==
+if exist "%~dp0bin\openart.exe" (
+  echo   da co bin\openart.exe
+) else (
+  echo   tai openart.exe ^(Windows^) tu GitHub release...
+  if not exist "%~dp0bin" mkdir "%~dp0bin"
+  call :dl "https://github.com/OpenArt-AI/cli/releases/download/v0.1.1/openart_0.1.1_windows_amd64.zip" "%TEMP%\dsds_oa.zip" && (
+    tar -xf "%TEMP%\dsds_oa.zip" -C "%~dp0bin" openart.exe & del "%TEMP%\dsds_oa.zip" 2>nul
+  ) || echo   !! tai openart.exe that bai - bo qua fallback OpenArt
+)
+if exist "%~dp0bin\openart.exe" (
+  echo   Mo dang nhap OpenArt trong trinh duyet. Hoan tat roi quay lai day...
+  "%~dp0bin\openart.exe" login
+  echo   ^(da xong OpenArt^)
+)
 
 echo == 9. Dang nhap ChatGPT (codex, gen chinh) ==
 if exist "%USERPROFILE%\.codex\auth.json" (

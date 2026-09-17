@@ -6,11 +6,12 @@
 ```
 setup.bat
 ```
-Tự tải **Python + Node + Git** portable vào `%USERPROFILE%\dsds_studio\tools`, cài `aiohttp/pillow/opencv/…` + `codex` (npm), rồi lần lượt mở **đăng nhập OpenArt** (chờ bạn xong) → **đăng nhập ChatGPT/codex**.
+Tự tải **Python + Node + Git** portable vào `%USERPROFILE%\dsds_studio\tools`, cài `aiohttp/pillow/opencv/…` + `codex` (npm), tự tải **`openart.exe`** (bản Windows), rồi lần lượt mở **đăng nhập OpenArt** (chờ bạn xong) → **đăng nhập ChatGPT/codex**.
 
 Cần chuẩn bị thêm:
 - `.env` cạnh file này có dòng `ARK_API_KEY=ark-...` (cho dola-seed nhìn ảnh).
-- `bin\chatgpt-imagegen.exe` và `bin\openart.exe` (bản Windows) — đặt vào thư mục `bin\`.
+- `bin\chatgpt-imagegen` (script python — gen chính, chạy qua python nên chạy được trên Windows).
+- `bin\openart.exe` (fallback) — setup **tự tải** từ GitHub release, không cần chuẩn bị tay.
 
 ## Chạy
 ```

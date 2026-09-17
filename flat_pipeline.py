@@ -174,13 +174,37 @@ def _bin(name):
 CHATGPT_BIN = _bin("chatgpt-imagegen")
 OPENART_BIN = _bin("openart")
 
+def _launcher(path):
+    """File là script python (shebang) -> chạy qua interpreter (bắt buộc trên Windows,
+    vì Windows không exec trực tiếp script không có .exe)."""
+    try:
+        with open(path, "rb") as f:
+            first = f.readline(200)
+        if first.startswith(b"#!") and b"python" in first:
+            return [sys.executable]
+    except Exception:
+        pass
+    return []
+
+def _win_native_ok(path):
+    """True nếu file chạy được trên nền tảng hiện tại. Trên Windows, binary ELF (Linux)
+    không chạy được -> False để báo lỗi rõ thay vì WinError 193 khó hiểu."""
+    if sys.platform != "win32":
+        return True
+    try:
+        with open(path, "rb") as f:
+            magic = f.read(4)
+        return magic != b"\x7fELF"          # ELF = binary Linux, không phải PE Windows
+    except Exception:
+        return True
+
 def _run(cmd, timeout):
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if p.returncode != 0:
         raise RuntimeError(p.stderr.strip() or p.stdout.strip() or f"rc={p.returncode}")
 
 def _chatgpt_gen(prompt, refs, out, timeout=420):
-    cmd = [CHATGPT_BIN, prompt, "-o", str(out), "--size", "auto",
+    cmd = _launcher(CHATGPT_BIN) + [CHATGPT_BIN, prompt, "-o", str(out), "--size", "auto",
            "--backend", "codex", "--quiet"]
     for r in refs:
         cmd += ["-i", str(r)]
@@ -190,7 +214,10 @@ def _chatgpt_gen(prompt, refs, out, timeout=420):
     return out
 
 def _openart_gen(prompt, refs, out, timeout=300):
-    cmd = [OPENART_BIN, "generate", "image", prompt, "--model", OA_MODEL,
+    if not _win_native_ok(OPENART_BIN):
+        raise RuntimeError("OpenArt chỉ có bản Linux, không chạy được trên Windows "
+                           "(chỉ dùng chatgpt-imagegen làm gen chính)")
+    cmd = _launcher(OPENART_BIN) + [OPENART_BIN, "generate", "image", prompt, "--model", OA_MODEL,
            "-o", str(out), "--yes", "--compact"]
     for r in refs:
         cmd += ["--image", str(r)]
