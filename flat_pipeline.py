@@ -97,10 +97,10 @@ def _data_uri(p):
 # Vision chỉ cần bbox (toạ độ 0-1000) + mô tả hoạ tiết -> gửi ảnh THU NHỎ cho nhanh,
 # không đổi kết quả (bbox chuẩn hoá). Ảnh gốc to gửi full-res chậm ~2 phút/lần.
 VISION_MAXSIDE = int(os.getenv("FLAT_VISION_MAXSIDE", "1152"))
-# số panel gen song song. MẶC ĐỊNH 1 (tuần tự) vì codex (ChatGPT sub) chỉ cho 1 lượt
-# gen/lần theo tài khoản -> chạy song song sẽ xung đột và lỗi hết.
-# Nếu chủ yếu dùng OpenArt (cho phép song song) thì đặt FLAT_GEN_WORKERS=4 để nhanh hơn.
-GEN_WORKERS = int(os.getenv("FLAT_GEN_WORKERS", "1"))
+# số panel gen song song. codex gen song song ĐƯỢC khi token còn hạn; chỉ kẹt khi
+# token hết hạn và nhiều tiến trình cùng refresh (đua xoay refresh_token -> hỏng auth).
+# -> _gen_assemble chạy panel ĐẦU một mình để hâm nóng/refresh token rồi mới bung song song.
+GEN_WORKERS = int(os.getenv("FLAT_GEN_WORKERS", "4"))
 
 def _vision_uri(img, maxside=VISION_MAXSIDE):
     im = Image.open(img)
@@ -318,11 +318,18 @@ def _gen_assemble(work, bcf, bcb, scf, scb, dbf, dbb, dsf, dsb, out):
         gen_panel(prompt, refs, dst)
         log("gen", f"panel {i}/4: {name} (xong)")
         return name, dst
-    # 4 panel độc lập -> gen song song. Lỗi codex quá tải: hạ FLAT_GEN_WORKERS=1
+    items = list(enumerate(jobs, 1))
     panels = {}
-    with ThreadPoolExecutor(max_workers=min(GEN_WORKERS, len(jobs))) as ex:
-        for name, dst in ex.map(_one, enumerate(jobs, 1)):
-            panels[name] = dst
+    if GEN_WORKERS > 1 and len(items) > 1:
+        # panel đầu chạy MỘT MÌNH -> nếu token codex hết hạn thì chỉ 1 tiến trình
+        # refresh (tránh đua xoay refresh_token). Xong rồi mới bung phần còn lại.
+        name, dst = _one(items[0]); panels[name] = dst
+        with ThreadPoolExecutor(max_workers=min(GEN_WORKERS, len(items) - 1)) as ex:
+            for name, dst in ex.map(_one, items[1:]):
+                panels[name] = dst
+    else:
+        for it in items:
+            name, dst = _one(it); panels[name] = dst
     log("assemble", "cắt nền (ngưỡng) + ghép template ...")
     assemble(panels, out)
     log("done", str(out))
