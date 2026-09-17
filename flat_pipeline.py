@@ -19,7 +19,8 @@ Chạy:
 Yêu cầu: codex đã đăng nhập (chatgpt-imagegen/dangnhap-codex.sh) + `openart login`;
          ARK_API_KEY (env hoặc chatgpt-api/.env) cho bước vision seed.
 """
-import argparse, base64, json, mimetypes, os, re, subprocess, sys, tempfile, time
+import argparse, base64, io, json, mimetypes, os, re, subprocess, sys, tempfile, time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 _T0 = time.time()
@@ -93,6 +94,21 @@ def _data_uri(p):
     mime = mimetypes.guess_type(p)[0] or "image/jpeg"
     return f"data:{mime};base64," + base64.b64encode(Path(p).read_bytes()).decode()
 
+# Vision chỉ cần bbox (toạ độ 0-1000) + mô tả hoạ tiết -> gửi ảnh THU NHỎ cho nhanh,
+# không đổi kết quả (bbox chuẩn hoá). Ảnh gốc to gửi full-res chậm ~2 phút/lần.
+VISION_MAXSIDE = int(os.getenv("FLAT_VISION_MAXSIDE", "1152"))
+# số panel gen song song (mỗi panel là 1 subprocess chatgpt-imagegen/codex độc lập)
+GEN_WORKERS = int(os.getenv("FLAT_GEN_WORKERS", "4"))
+
+def _vision_uri(img, maxside=VISION_MAXSIDE):
+    im = Image.open(img)
+    if max(im.size) > maxside:
+        r = maxside / max(im.size)
+        im = im.resize((max(1, int(im.width * r)), max(1, int(im.height * r))), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.convert("RGB").save(buf, "JPEG", quality=85)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
 VISION_PROMPT = (
     "This is a photo of a person wearing a skater/skirt dress. Return ONLY JSON: "
     '{"bodice":{"box":[x0,y0,x1,y1],"desc":"..."},"skirt":{"box":[x0,y0,x1,y1],"desc":"..."}}. '
@@ -111,7 +127,7 @@ def _vision(client, img, prompt, need=()):
             log("vision", f"thử model {m} ...")
             r = client.chat.completions.create(model=m, messages=[{"role": "user", "content": [
                 {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": _data_uri(img)}}]}])
+                {"type": "image_url", "image_url": {"url": _vision_uri(img)}}]}])
             js = json.loads(re.search(r"\{.*\}", r.choices[0].message.content, re.S).group())
             for k in need:
                 if k not in js:
@@ -292,12 +308,18 @@ def _gen_assemble(work, bcf, bcb, scf, scb, dbf, dbb, dsf, dsb, out):
         ("skirt_front",  FLAT + SHAPE_FAN    + " " + dsf, [scf, ASSETS/"shape_fan.png"]),
         ("skirt_back",   FLAT + SHAPE_FAN    + " " + dsb, [scb, ASSETS/"shape_fan.png"]),
     ]
-    panels = {}
-    for i, (name, prompt, refs) in enumerate(jobs, 1):
+    def _one(item):
+        i, (name, prompt, refs) = item
         dst = work / f"panel_{name}.png"
-        log("gen", f"panel {i}/4: {name}")
+        log("gen", f"panel {i}/4: {name} (bắt đầu)")
         gen_panel(prompt, refs, dst)
-        panels[name] = dst
+        log("gen", f"panel {i}/4: {name} (xong)")
+        return name, dst
+    # 4 panel độc lập -> gen song song. Lỗi codex quá tải: hạ FLAT_GEN_WORKERS=1
+    panels = {}
+    with ThreadPoolExecutor(max_workers=min(GEN_WORKERS, len(jobs))) as ex:
+        for name, dst in ex.map(_one, enumerate(jobs, 1)):
+            panels[name] = dst
     log("assemble", "cắt nền (ngưỡng) + ghép template ...")
     assemble(panels, out)
     log("done", str(out))
@@ -319,11 +341,13 @@ def run(front, back, out, emit_sub=""):
         crop_norm(img, js["skirt"]["box"],  wh, sc)
         return js, bc, sc
 
-    jf, bcf, scf = process(front, "front")
-    if back:
-        jb, bcb, scb = process(back, "back")
+    if back:  # nhìn 2 ảnh song song cho nhanh
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            ff = ex.submit(process, front, "front"); fb = ex.submit(process, back, "back")
+            jf, bcf, scf = ff.result(); jb, bcb, scb = fb.result()
         bdesc_b, sdesc_b = jb["bodice"]["desc"], jb["skirt"]["desc"]
     else:  # không có ảnh sau -> tái dùng crop trước, mô tả "plain back"
+        jf, bcf, scf = process(front, "front")
         bcb, scb = bcf, scf
         bdesc_b = jf["bodice"]["desc"] + " This is the BACK: keep the same yoke/trim but plain body, remove any front-only buttons/buckle/emblem."
         sdesc_b = jf["skirt"]["desc"] + " Identical to the front."
