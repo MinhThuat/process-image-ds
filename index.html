@@ -39,6 +39,8 @@
     padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px}
   .ghost:hover{border-color:var(--pin);color:var(--pin)}
   .ghost[hidden]{display:none}
+  .ghost.hot{border-color:var(--thread);color:#f2b3ad;background:#2a1614}
+  .ghost:disabled{opacity:.6;cursor:default}
 
   /* ---- cutting mat (canvas) ---- */
   #mat{flex:1;overflow:auto;padding:20px 22px;
@@ -136,7 +138,7 @@
   <h1 class="disp">Flat Studio<span class="sub">ảnh váy → rập phẳng</span></h1>
   <div class="sp"></div>
   <span id="cxchip" class="chip"><span class="dot"></span><span id="cxtxt">đang kiểm tra codex…</span></span>
-  <button id="restart" class="ghost" hidden>↻ Có code mới — Restart</button>
+  <button id="restart" class="ghost">↻ Restart</button>
 </header>
 
 <!-- CANVAS: cutting mat -->
@@ -189,14 +191,6 @@
     <div class="mono" style="font-size:12px;color:var(--muted);line-height:1.6">
       Pipeline: <b style="color:var(--chalk)">dola-seed</b> nhìn+crop →
       <b style="color:var(--chalk)">chatgpt-imagegen</b> (lỗi → OpenArt) → cắt nền + ghép.
-    </div>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
-      <span class="mono" style="font-size:11px;color:var(--muted)">Cỡ xuất</span>
-      <select id="scale" class="sel">
-        <option value="1">Thường · 2400×1900</option>
-        <option value="2">Lớn · 4800×3800</option>
-        <option value="3">In · 7200×5700</option>
-      </select>
     </div>
     <button class="go" id="go">✂ Tạo rập</button>
     <div id="stat" class="mono" style="font-size:11.5px;color:var(--muted);margin-top:8px"></div>
@@ -301,7 +295,7 @@ $("#go").addEventListener("click",async()=>{
   $("#go").disabled=true; $("#go").textContent="⏳ đang chạy…";
   ["#gcrop","#gpanel","#gfinal"].forEach(g=>$(g).innerHTML="");
   const r=await api("/run",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({mode,front:picks.front,back:picks.back,scale:+$("#scale").value})});
+    body:JSON.stringify({mode,front:picks.front,back:picks.back})});
   if(r.error){toastStat("⚠ "+r.error);resetGo();return;}
   run=r.run; startPoll();
 });
@@ -312,7 +306,7 @@ function startPoll(){ clearInterval(poll); poll=setInterval(tick,1500); tick(); 
 async function tick(){
   const s=await api("/state?run="+run); if(s.error)return;
   renderLog(s.log); renderImgs(s.images);
-  $("#restart").hidden=!s.src_changed;
+  setUpdate(s.src_changed);
   if(s.codex_bad) showBadge();
   $("#mat").classList.toggle("working",s.running);
   toastStat(s.running?"⏳ đang xử lý…":"✓ xong");
@@ -347,8 +341,15 @@ $("#mat").addEventListener("click",e=>{
 });
 
 // ---- codex badge ----
-function showBadge(){$("#badge").classList.add("show")}
-$("#cxclose").onclick=()=>$("#badge").classList.remove("show");
+let badgeDismissed=false;
+function showBadge(){ if(!badgeDismissed) $("#badge").classList.add("show"); }
+$("#cxclose").onclick=()=>{badgeDismissed=true; $("#badge").classList.remove("show");};
+// đổi nhãn nút Restart khi có code mới (nút luôn hiện để restart thủ công bất cứ lúc nào)
+function setUpdate(changed){
+  const b=$("#restart"); if(b._busy)return;
+  b.textContent = changed ? "↻ Có code mới — Restart" : "↻ Restart";
+  b.classList.toggle("hot", !!changed);
+}
 $("#cxlogin").onclick=async()=>{
   $("#cxlogin").disabled=true; $("#clog").style.display="block"; $("#clog").textContent="…";
   await api("/codex/login",{method:"POST"});
@@ -361,11 +362,20 @@ $("#cxlogin").onclick=async()=>{
 function setCodex(ok){
   const c=$("#cxchip"); c.className="chip "+(ok?"ok":"bad");
   $("#cxtxt").textContent=ok?"codex OK":"codex chưa đăng nhập";
-  if(!ok)showBadge();
+  if(ok){badgeDismissed=false; $("#badge").classList.remove("show");}
+  else showBadge();
 }
-api("/codex/status").then(r=>setCodex(r.ok));
-$("#restart").onclick=async()=>{await api("/restart",{method:"POST"});
-  $("#restart").textContent="đang khởi động lại — mở lại tab sau vài giây";};
+// heartbeat: chạy cả lúc rảnh -> luôn biết codex hết hạn / có code mới
+async function heartbeat(){
+  try{ const r=await api("/codex/status"); setCodex(r.ok); setUpdate(r.src_changed); }catch(e){}
+}
+setInterval(heartbeat,8000); heartbeat();
+$("#restart").onclick=async()=>{
+  const b=$("#restart"); b._busy=true; b.disabled=true;
+  b.textContent="đang khởi động lại — chờ vài giây rồi tải lại trang…";
+  try{ await api("/restart",{method:"POST"}); }catch(e){}
+  setTimeout(()=>location.reload(), 4000);   // start.bat tự bật lại server
+};
 </script>
 </body>
 </html>

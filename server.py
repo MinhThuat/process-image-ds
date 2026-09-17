@@ -179,7 +179,8 @@ async def state(request):
 
 async def codex_status(request):
     ok = CODEX_AUTH.is_file()
-    return web.json_response({"ok": ok, "reason": "" if ok else "chưa đăng nhập codex"})
+    return web.json_response({"ok": ok, "reason": "" if ok else "chưa đăng nhập codex",
+                             "src_changed": _src_mtime() > request.app["boot_mtime"]})
 
 
 async def codex_login(request):
