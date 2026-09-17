@@ -11,7 +11,7 @@ Tự tải **Python + Node + Git** portable vào `%USERPROFILE%\dsds_studio\tool
 Cần chuẩn bị thêm:
 - `.env` cạnh file này có dòng `ARK_API_KEY=ark-...` (cho dola-seed nhìn ảnh).
 - `bin\chatgpt-imagegen` (script python — gen chính, chạy qua python nên chạy được trên Windows).
-- `bin\openart.exe` (fallback) — setup **tự tải** từ GitHub release, không cần chuẩn bị tay.
+- `bin\openart.exe` (fallback) — **đã đóng gói sẵn** trong `bin\`, không cần tải. (Nếu thiếu, setup sẽ tự tải lại từ GitHub release.)
 
 ## Chạy
 ```

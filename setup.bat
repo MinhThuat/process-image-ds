@@ -43,7 +43,7 @@ if exist "%~dp0bin\openart.exe" (
   echo   tai openart.exe ^(Windows^) tu GitHub release...
   if not exist "%~dp0bin" mkdir "%~dp0bin"
   call :dl "https://github.com/OpenArt-AI/cli/releases/download/v0.1.1/openart_0.1.1_windows_amd64.zip" "%TEMP%\dsds_oa.zip" && (
-    tar -xf "%TEMP%\dsds_oa.zip" -C "%~dp0bin" openart.exe & del "%TEMP%\dsds_oa.zip" 2>nul
+    "%SystemRoot%\System32\tar.exe" -xf "%TEMP%\dsds_oa.zip" -C "%~dp0bin" openart.exe & del "%TEMP%\dsds_oa.zip" 2>nul
   ) || echo   !! tai openart.exe that bai - bo qua fallback OpenArt
 )
 if exist "%~dp0bin\openart.exe" (
