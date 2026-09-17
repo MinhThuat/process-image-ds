@@ -97,8 +97,10 @@ def _data_uri(p):
 # Vision chỉ cần bbox (toạ độ 0-1000) + mô tả hoạ tiết -> gửi ảnh THU NHỎ cho nhanh,
 # không đổi kết quả (bbox chuẩn hoá). Ảnh gốc to gửi full-res chậm ~2 phút/lần.
 VISION_MAXSIDE = int(os.getenv("FLAT_VISION_MAXSIDE", "1152"))
-# số panel gen song song (mỗi panel là 1 subprocess chatgpt-imagegen/codex độc lập)
-GEN_WORKERS = int(os.getenv("FLAT_GEN_WORKERS", "4"))
+# số panel gen song song. MẶC ĐỊNH 1 (tuần tự) vì codex (ChatGPT sub) chỉ cho 1 lượt
+# gen/lần theo tài khoản -> chạy song song sẽ xung đột và lỗi hết.
+# Nếu chủ yếu dùng OpenArt (cho phép song song) thì đặt FLAT_GEN_WORKERS=4 để nhanh hơn.
+GEN_WORKERS = int(os.getenv("FLAT_GEN_WORKERS", "1"))
 
 def _vision_uri(img, maxside=VISION_MAXSIDE):
     im = Image.open(img)
@@ -250,7 +252,8 @@ def gen_panel(prompt, refs, out):
         log("gen", "  ✓ xong bằng chatgpt-imagegen")
         return r
     except Exception as e:
-        log("gen", f"  ✗ chatgpt-imagegen lỗi -> fallback OpenArt: {str(e)[:100]}")
+        log("gen", "  ✗ chatgpt-imagegen lỗi -> fallback OpenArt. Lỗi đầy đủ:")
+        log("gen", "  " + str(e)[:1500].replace("\n", "\n  "))
     r = _openart_gen(prompt, refs, out)
     log("gen", "  ✓ xong bằng OpenArt Seedream 4.5")
     return r
