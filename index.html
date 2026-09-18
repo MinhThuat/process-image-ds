@@ -180,6 +180,9 @@
     <label id="cbwrap" style="display:flex;gap:8px;align-items:center;margin-top:12px;cursor:pointer;font-size:13px;color:var(--chalk)">
       <input type="checkbox" id="cbcombined"> Ảnh mặt trước gồm CẢ 2 mặt (trước + sau trong 1 ảnh)
     </label>
+    <label id="flatwrap" style="display:flex;gap:8px;align-items:center;margin-top:8px;cursor:pointer;font-size:13px;color:var(--chalk)">
+      <input type="checkbox" id="cbflat"> Vẽ PHẲNG vector (bỏ hiệu ứng nổi/3D — mặc định giữ 3D)
+    </label>
     <details id="onlywrap" style="margin-top:10px;font-size:12.5px;color:var(--chalk)">
       <summary style="cursor:pointer;color:var(--muted)">Chỉ gen mảnh chọn (bỏ trống = tất cả)</summary>
       <div id="onlyboxes" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px">
@@ -241,6 +244,7 @@ const picks={front:null, back:null};
 function syncMode(){
   const pieces=mode==="pieces", combined=$("#cbcombined").checked;
   $("#cbwrap").style.display=pieces?"flex":"none";        // checkbox chỉ cho pieces
+  $("#flatwrap").style.display=pieces?"flex":"none";      // kiểu vẽ chỉ cho pieces
   $("#onlywrap").style.display=pieces?"block":"none";     // chọn mảnh chỉ cho pieces
   $("#dzb").classList.toggle("off", !pieces || combined); // art / combined -> ẩn ảnh sau
 }
@@ -324,10 +328,11 @@ $("#go").addEventListener("click",async()=>{
   const combined=mode==="pieces"&&$("#cbcombined").checked;
   const back=(mode==="pieces"&&!combined)?picks.back:null;
   const only=mode==="pieces"?[...document.querySelectorAll("#onlyboxes input:checked")].map(c=>c.dataset.slug):[];
+  const flat=mode==="pieces"&&$("#cbflat").checked;
   $("#go").disabled=true; $("#go").textContent="⏳ đang chạy…";
   ["#gcrop","#gpanel","#gfinal"].forEach(g=>$(g).innerHTML="");
   const r=await api("/run",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({mode,front:picks.front,back,combined,only})});
+    body:JSON.stringify({mode,front:picks.front,back,combined,only,flat})});
   if(r.error){toastStat("⚠ "+r.error);resetGo();return;}
   run=r.run; startPoll();
 });
@@ -371,7 +376,7 @@ $("#gfinal").addEventListener("click",async e=>{
   const b=e.target.closest(".regen"); if(!b)return;
   e.stopPropagation(); b.disabled=true; b.textContent="…";
   const r=await api("/regen",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({run:b.dataset.run,person:+b.dataset.person,slug:b.dataset.slug})});
+    body:JSON.stringify({run:b.dataset.run,person:+b.dataset.person,slug:b.dataset.slug,flat:$("#cbflat").checked})});
   if(r&&r.error){toastStat("⚠ "+r.error);b.disabled=false;b.textContent="⟳";return;}
   toastStat("⟳ đang gen lại "+b.dataset.slug+"…"); startPoll();
 });

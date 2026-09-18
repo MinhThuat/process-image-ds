@@ -74,6 +74,13 @@ DRESS_FAITHFUL = (
     "exactly as in the reference photo — keep every colour, detail, shading, soft highlight and any raised "
     "faux-3D / moulded look; do NOT flatten or simplify it into plain vector. No human body, no head, no "
     "arms, no legs, no hanger, no mockup.")
+# PHẲNG: vẽ vector phẳng như bản gốc (bỏ hết bóng/nổi/3D) — dùng khi user chọn "Art phẳng" cho mảnh.
+DRESS_FLAT = (
+    "A 2D FLAT VECTOR sewing-pattern PANEL, absolutely flat and symmetric, front view, on a plain flat "
+    "light grey background and NOTHING else (so the panel can be cut out). SOLID FLAT COLOR FILL only, "
+    "crisp clean edges like a technical CAD flat: NO fabric texture, NO shading, NO soft highlight, NO "
+    "gradient, NO drop shadow, NO 3D, NO moulded look, completely matte. No human body, no head, no arms, "
+    "no legs, no hanger, no mockup.")
 SHAPE_BODICE = " Shape: a sleeveless bodice tank panel like the second reference (shape guide)."
 SHAPE_FAN = (" Shape: a wide quarter-circle CIRCLE-SKIRT fan panel spread flat like the second "
              "reference (shape guide). Every band follows the curved arc, parallel to the curved hem.")
@@ -92,6 +99,17 @@ PANEL_BLEED = (
     "four edges: NO margin, NO border, NO letterboxing, NO garment silhouette/outline, NO hood, NO "
     "collar, NO cuffs, NO person, NO hanger, NO mockup — just this one panel's print, corner to corner. "
     "The print of this panel: {desc}")
+
+# PHẲNG: cùng full-bleed nhưng vẽ VECTOR phẳng (bỏ 3D/bóng) — khi user chọn "Art phẳng" cho mảnh.
+PANEL_BLEED_FLAT = (
+    "A full-bleed textile PRINT for the {label} — the printed artwork of ONE panel only, isolated from "
+    "the whole garment. Draw it as a FLAT VECTOR: SOLID flat colours only, crisp clean shapes, NO 3D, NO "
+    "shading, NO soft highlight, NO bevel, NO shadow, NO fabric texture, completely matte — like a "
+    "technical CAD flat. The panel's BASE fabric colour is {base} and fills any area with no artwork (if "
+    "white, use white); NEVER replace empty areas with black, void, glow, vignette or transparency. Zoom "
+    "in so the artwork FILLS 100% of the frame and BLEEDS OFF all four edges: NO margin, NO border, NO "
+    "letterboxing, NO garment silhouette/outline, NO hood, NO collar, NO cuffs, NO person, NO hanger, NO "
+    "mockup — just this one panel's print, corner to corner. The print of this panel: {desc}")
 
 def _base_colour(desc):
     """Màu nền vải để neo prompt — vision luôn mở đầu desc bằng 'base <màu>; ...'."""
@@ -285,16 +303,19 @@ def _slug_wanted(slug, want):
         return f"tay_{side}" in want
     return False
 
-def _make_piece(spec, refs, work, out):
-    """Gen 1 mảnh theo spec -> file <out.stem>_<slug><suffix>. Váy: cắt cong (cutout); áo/quần/tay: full-bleed."""
+def _make_piece(spec, refs, work, out, flat=False):
+    """Gen 1 mảnh -> file <out.stem>_<slug><suffix>. Váy: cắt cong (cutout); áo/quần/tay: full-bleed.
+    flat=True -> vẽ VECTOR phẳng (bỏ 3D/bóng); flat=False (mặc định) -> giữ chi tiết/nổi giả-3D."""
     dst = out.with_name(f"{out.stem}_{spec['slug']}{out.suffix}")
     ref = refs[spec["side"]]
     if spec["kind"] == "dress":
         tmp = work / f"gen_{spec['slug']}.png"
-        gen_panel(DRESS_FAITHFUL + spec["shape"] + " " + spec["desc"], [ref, ASSETS / spec["guide"]], tmp)
+        base = DRESS_FLAT if flat else DRESS_FAITHFUL
+        gen_panel(base + spec["shape"] + " " + spec["desc"], [ref, ASSETS / spec["guide"]], tmp)
         cutout(tmp).save(dst)                               # cắt theo silhouette, nền trong suốt
     else:
-        gen_panel(PANEL_BLEED.format(label=spec["label"], base=_base_colour(spec["desc"]), desc=spec["desc"]),
+        tpl = PANEL_BLEED_FLAT if flat else PANEL_BLEED
+        gen_panel(tpl.format(label=spec["label"], base=_base_colour(spec["desc"]), desc=spec["desc"]),
                   [ref], dst)
         _flatten_white(dst)                                 # full-bleed: đục, nền vải trắng
     return dst
@@ -425,7 +446,7 @@ def cutout(path, T=12):
 
 
 # ---------- 4. workers từng người ----------
-def run_pieces_one(client, img, out, emit_sub="", back=None, combined=False, only=None, cache=None):
+def run_pieces_one(client, img, out, emit_sub="", back=None, combined=False, only=None, cache=None, flat=False):
     """1 người/1 trang phục -> mỗi mảnh 1 file.
       áo+quần: full-bleed chữ nhật. váy: cắt cong (cutout), nền trong suốt.
       mặt sau: back (2 ảnh) / combined (1 ảnh 2 mặt) -> lưng thật; else tự suy từ trước.
@@ -455,8 +476,8 @@ def run_pieces_one(client, img, out, emit_sub="", back=None, combined=False, onl
         plan = [s for s in plan if _slug_wanted(s["slug"], want)]
     outs = []
     for spec in plan:
-        log("gen", f"gen mảnh {spec['slug']} ...")
-        outs.append(_make_piece(spec, refs, work, out))
+        log("gen", f"gen mảnh {spec['slug']} ({'phẳng' if flat else '3D'}) ...")
+        outs.append(_make_piece(spec, refs, work, out, flat=flat))
     log("done", f"{len(outs)} mảnh: " + ", ".join(o.name for o in outs))
     return outs[0] if outs else out
 
@@ -509,16 +530,16 @@ def _run_perperson(img, out, worker, label, wprefix, **wkw):
     log("done", f"{label} {len(outs)}/{len(boxes)}: " + ", ".join(o.name for o in outs))
     return outs
 
-def run_pieces(front, out, back=None, combined=False, only=None, cache=None):
+def run_pieces(front, out, back=None, combined=False, only=None, cache=None, flat=False):
     """Tách mảnh. 1 ảnh (tự suy sau) -> tách từng người. --back/--combined -> 1 trang phục, lưng thật.
-    only = chỉ gen slug đã chọn; cache = gen lẻ dùng lại mô tả cũ (1 trang phục)."""
+    only = chỉ gen slug đã chọn; cache = gen lẻ dùng lại mô tả cũ; flat = vẽ phẳng vector thay vì 3D."""
     if back or combined or cache:
         client = _ark_client()
         tag = "gen lẻ (cache)" if cache else ("+sau thật (2 ảnh)" if back else "2-view (1 ảnh)")
-        log("start", f"PIECES tách mảnh | {Path(front).name} | {tag}")
-        run_pieces_one(client, front, Path(out), back=back, combined=combined, only=only, cache=cache)
+        log("start", f"PIECES tách mảnh | {Path(front).name} | {tag} | {'phẳng' if flat else '3D'}")
+        run_pieces_one(client, front, Path(out), back=back, combined=combined, only=only, cache=cache, flat=flat)
         return [Path(out)]
-    return _run_perperson(front, Path(out), run_pieces_one, "PIECES tách mảnh", "piecesset_", only=only)
+    return _run_perperson(front, Path(out), run_pieces_one, "PIECES tách mảnh", "piecesset_", only=only, flat=flat)
 
 def run_art(front, out):
     """Art phẳng: 1 bản vẽ nguyên bộ mặt trước. Tách từng người."""
@@ -547,6 +568,10 @@ def _selfcheck():
     diff = _pieces_plan({**tb, "sleeves_same": False})
     assert {s["slug"] for s in diff} == {"ao_truoc", "ao_sau", "quan_truoc", "quan_sau",
                                          "tay_trai_truoc", "tay_trai_sau", "tay_phai_truoc", "tay_phai_sau"}
+    # 2 kiểu vẽ: PANEL_BLEED (3D) vs PANEL_BLEED_FLAT (phẳng) format OK; váy có DRESS_FLAT
+    for tpl in (PANEL_BLEED, PANEL_BLEED_FLAT):
+        assert "{" not in tpl.format(label="x", base="white", desc="y")
+    assert "FLAT VECTOR" in DRESS_FLAT and "NO 3D" in PANEL_BLEED_FLAT
     # cutout: đọc file (PIL, an toàn path Unicode) -> cắt vật thể theo silhouette, ra RGBA nhỏ hơn
     im2 = Image.new("RGB", (60, 60), "white"); ImageDraw.Draw(im2).rectangle([20, 20, 40, 40], fill="red")
     cp = Path(tempfile.mktemp(suffix=".png")); im2.save(cp)
@@ -579,6 +604,8 @@ if __name__ == "__main__":
                     help="1 bản vẽ phẳng nguyên bộ mặt trước; tách từng người")
     ap.add_argument("--only", help="pieces: CHỈ gen các slug này (vd ao_truoc,quan_sau)")
     ap.add_argument("--cache", help="pieces: nạp lại mô tả vision cũ (pieces.json), BỎ vision -> gen lẻ")
+    ap.add_argument("--flat", action="store_true",
+                    help="pieces: vẽ VECTOR phẳng (bỏ hiệu ứng 3D); mặc định giữ chi tiết/nổi 3D")
     ap.add_argument("-o", "--out", default="flat_out.png")
     ap.add_argument("--log", help="file ghi log (mặc định: <out>.log cạnh output)")
     ap.add_argument("--emit", help="ghi crop/mảnh vào thư mục này (cho UI web poll)")
@@ -595,6 +622,6 @@ if __name__ == "__main__":
         if a.art:
             run_art(a.front, out)
         else:                                   # mặc định: pieces
-            run_pieces(a.front, out, back=a.back, combined=a.combined, only=a.only, cache=a.cache)
+            run_pieces(a.front, out, back=a.back, combined=a.combined, only=a.only, cache=a.cache, flat=a.flat)
     else:
         ap.error("cần --front (+ --pieces hoặc --art), hoặc --selfcheck")

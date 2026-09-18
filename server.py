@@ -140,6 +140,7 @@ async def run(request):
     mode = body.get("mode", "pieces")   # pieces | art
     front = body.get("front"); back = body.get("back")
     combined = bool(body.get("combined"))
+    flat = bool(body.get("flat"))        # True -> vẽ phẳng vector; False -> giữ 3D
     only = body.get("only") or []        # danh sách slug -> chỉ gen mảnh đó
     if not front or not Path(front).is_file():
         return web.json_response({"error": "chưa có ảnh front"}, status=400)
@@ -158,6 +159,8 @@ async def run(request):
             cmd += ["--back", back]
         if only:
             cmd += ["--only", ",".join(only)]
+        if flat:
+            cmd += ["--flat"]
     p = subprocess.Popen(cmd, cwd=str(ROOT))
     _procs[rid] = p
     return web.json_response({"run": rid})
@@ -183,6 +186,8 @@ async def regen(request):
     cmd = [sys.executable, str(PIPELINE), "--pieces", "--front", str(front),
            "--cache", str(cache), "--only", slug, "-o", str(out),
            "--emit", str(pdir), "--log", str(rundir / "run.log")]
+    if bool(body.get("flat")):
+        cmd += ["--flat"]
     back = pdir / "crop_back.png"
     if back.is_file():
         cmd += ["--back", str(back)]
