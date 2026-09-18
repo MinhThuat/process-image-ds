@@ -193,15 +193,11 @@ def _item(p, name):
 def _list_images(rundir: Path):
     """Trả về ảnh theo nhóm để UI xếp lên canvas (kèm path thật để mở thư mục)."""
     groups = {"crop": [], "panel": [], "final": []}
-    # gộp cả run trực tiếp lẫn các thư mục con person_* (mode multi)
-    for base in [rundir] + sorted(rundir.glob("person_*")):
+    # gộp cả run trực tiếp lẫn các thư mục con person_* (nhiều người)
+    for base in [rundir] + [p for p in sorted(rundir.glob("person_*")) if p.is_dir()]:
         tag = base.name if base != rundir else ""
         for c in sorted(base.glob("crop_*.png")):
             groups["crop"].append(_item(c, (tag + " " + c.stem).strip()))
-        for name in PANELS:
-            f = base / f"panel_{name}.png"
-            if f.exists():
-                groups["panel"].append(_item(f, (tag + " " + name).strip()))
     for f in sorted(rundir.glob("final*.png")):
         it = _item(f, f.stem)
         pp = _parse_piece(f.stem)
