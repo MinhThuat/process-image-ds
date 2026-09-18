@@ -61,8 +61,8 @@ VSC = Path(os.getenv("VSC_ROOT", "/mnt/6C96C1A096C16AE2/vsc"))
 _DEF_ENV = (HERE / ".env") if (HERE / ".env").exists() else (VSC / "chatgpt-api" / ".env")
 ENV_FILE = Path(os.getenv("ARK_ENV_FILE", _DEF_ENV))
 ARK_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
-VMODELS = ["dola-seed-2-1-turbo-260628",  # model chính
-           "seed-2-0-pro-260328", "seed-2-0-lite-260228", "seed-1-6-250915"]  # fallback
+VMODELS = ["seed-2-0-lite-260428",   # model chính (dola-seed lite)
+           "seed-2-0-mini-260428"]   # backup (dola-seed mini)
 OA_MODEL = "byte-plus-seedream-4-5"
 
 # --- gen prompt: MẢNH VÁY (cắt cong) -> vẽ trên nền xám rồi cutout() theo silhouette ---
