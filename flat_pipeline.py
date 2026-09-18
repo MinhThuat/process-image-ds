@@ -77,10 +77,11 @@ DRESS_FAITHFUL = (
 # PHẲNG: vẽ vector phẳng như bản gốc (bỏ hết bóng/nổi/3D) — dùng khi user chọn "Art phẳng" cho mảnh.
 DRESS_FLAT = (
     "A 2D FLAT VECTOR sewing-pattern PANEL, absolutely flat and symmetric, front view, on a plain flat "
-    "light grey background and NOTHING else (so the panel can be cut out). SOLID FLAT COLOR FILL only, "
-    "crisp clean edges like a technical CAD flat: NO fabric texture, NO shading, NO soft highlight, NO "
-    "gradient, NO drop shadow, NO 3D, NO moulded look, completely matte. No human body, no head, no arms, "
-    "no legs, no hanger, no mockup.")
+    "light grey background and NOTHING else (so the panel can be cut out). REDRAW the print as CLEAN flat "
+    "vector shapes — this is NOT a photo. SOLID FLAT COLOR FILL only, crisp clean edges like a technical "
+    "CAD flat: NO fabric texture, NO shading, NO soft highlight, NO gradient, NO drop shadow, NO 3D, NO "
+    "moulded look, NO photo-realism, completely matte. Clean geometric shapes + clean solid/dashed stitch "
+    "lines. No human body, no head, no arms, no legs, no hanger, no mockup.")
 SHAPE_BODICE = " Shape: a sleeveless bodice tank panel like the second reference (shape guide)."
 SHAPE_FAN = (" Shape: a wide quarter-circle CIRCLE-SKIRT fan panel spread flat like the second "
              "reference (shape guide). Every band follows the curved arc, parallel to the curved hem.")
@@ -100,16 +101,17 @@ PANEL_BLEED = (
     "collar, NO cuffs, NO person, NO hanger, NO mockup — just this one panel's print, corner to corner. "
     "The print of this panel: {desc}")
 
-# PHẲNG: cùng full-bleed nhưng vẽ VECTOR phẳng (bỏ 3D/bóng) — khi user chọn "Art phẳng" cho mảnh.
+# PHẲNG: vẽ VECTOR PHẲNG SẠCH như bản gốc (CAD flat) — REDRAW thành vector, KHÔNG trace ảnh.
 PANEL_BLEED_FLAT = (
-    "A full-bleed textile PRINT for the {label} — the printed artwork of ONE panel only, isolated from "
-    "the whole garment. Draw it as a FLAT VECTOR: SOLID flat colours only, crisp clean shapes, NO 3D, NO "
-    "shading, NO soft highlight, NO bevel, NO shadow, NO fabric texture, completely matte — like a "
-    "technical CAD flat. The panel's BASE fabric colour is {base} and fills any area with no artwork (if "
-    "white, use white); NEVER replace empty areas with black, void, glow, vignette or transparency. Zoom "
-    "in so the artwork FILLS 100% of the frame and BLEEDS OFF all four edges: NO margin, NO border, NO "
-    "letterboxing, NO garment silhouette/outline, NO hood, NO collar, NO cuffs, NO person, NO hanger, NO "
-    "mockup — just this one panel's print, corner to corner. The print of this panel: {desc}")
+    "A 2D FLAT VECTOR technical CAD flat of the {label}. REDRAW the panel's print as CLEAN FLAT VECTOR "
+    "ART — SOLID flat colour blocks with crisp clean edges, absolutely flat, matte and simplified, like a "
+    "sewing-pattern diagram. This is NOT a photo: NO 3D, NO shading, NO soft highlight, NO bevel, NO "
+    "gradient, NO drop shadow, NO fabric texture, NO photo-realism, no noise. Redraw every graphic as "
+    "clean geometric shapes and clean solid/dashed stitch lines. The BASE fabric colour is {base} and "
+    "fills any area with no graphic (if white, use pure white); NEVER a black void, glow, vignette or "
+    "transparency. Fill the whole frame and bleed off all four edges: NO margin, NO border, NO garment "
+    "silhouette/outline, NO hood, NO collar, NO cuffs, NO person, NO hanger, NO mockup. "
+    "The print of this panel: {desc}")
 
 def _base_colour(desc):
     """Màu nền vải để neo prompt — vision luôn mở đầu desc bằng 'base <màu>; ...'."""
