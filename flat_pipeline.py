@@ -51,7 +51,7 @@ def _workdir(prefix, sub=""):
     return Path(tempfile.mkdtemp(prefix=prefix))
 
 import cv2, numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from scipy import ndimage
 
 HERE = Path(__file__).resolve().parent
@@ -407,7 +407,8 @@ def gen_panel(prompt, refs, out):
 
 # ---------- 3. cutout theo ngưỡng nền (cho mảnh váy: cắt cong, nền trong suốt) ----------
 def cutout(path, T=12):
-    rgb = cv2.imread(str(path))[:, :, ::-1].copy()
+    # PIL đọc được path Unicode (dấu tiếng Việt) trên Windows; cv2.imread thì KHÔNG (trả None).
+    rgb = np.array(Image.open(path).convert("RGB"))       # RGB sẵn, không cần đảo BGR
     im = rgb.astype(np.int16); h, w = im.shape[:2]
     corners = np.concatenate([im[:20, :20].reshape(-1, 3), im[:20, -20:].reshape(-1, 3),
                               im[-20:, :20].reshape(-1, 3), im[-20:, -20:].reshape(-1, 3)])
@@ -546,6 +547,11 @@ def _selfcheck():
     diff = _pieces_plan({**tb, "sleeves_same": False})
     assert {s["slug"] for s in diff} == {"ao_truoc", "ao_sau", "quan_truoc", "quan_sau",
                                          "tay_trai_truoc", "tay_trai_sau", "tay_phai_truoc", "tay_phai_sau"}
+    # cutout: đọc file (PIL, an toàn path Unicode) -> cắt vật thể theo silhouette, ra RGBA nhỏ hơn
+    im2 = Image.new("RGB", (60, 60), "white"); ImageDraw.Draw(im2).rectangle([20, 20, 40, 40], fill="red")
+    cp = Path(tempfile.mktemp(suffix=".png")); im2.save(cp)
+    co = cutout(cp)
+    assert co.mode == "RGBA" and co.width < 60 and co.height < 60
     # flatten: PNG trong suốt -> đục nền trắng (mảnh full-bleed không bị thủng)
     q = Path(tempfile.mktemp(suffix=".png")); Image.new("RGBA", (4, 4), (10, 20, 30, 0)).save(q)
     _flatten_white(q)
