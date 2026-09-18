@@ -26,9 +26,24 @@ CODEX_LOGIN_LOG = DATA / "codex_login.log"
 SRC = [ROOT / "server.py", ROOT / "index.html", PIPELINE]
 
 MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
-# thứ tự panel hiển thị trên canvas
-PANELS = ["bodice_front", "bodice_back", "skirt_front", "skirt_back"]
+# slug mảnh (khớp flat_pipeline) -> parse tên file final_[<person>_]<slug>.png để gắn nút gen lại
+KNOWN_SLUGS = ["ao_truoc", "ao_sau", "quan_truoc", "quan_sau",
+               "tay_truoc", "tay_sau", "tay_trai_truoc", "tay_trai_sau",
+               "tay_phai_truoc", "tay_phai_sau", "than_truoc", "than_sau", "ta_truoc", "ta_sau"]
 CODEX_ERR = re.compile(r"codex.*(login|auth|expired|401|unauthor|token)", re.I)
+
+def _parse_piece(stem):
+    """final_<slug> hoặc final_<person>_<slug> -> (person, slug); None nếu không phải mảnh."""
+    if not stem.startswith("final_"):
+        return None
+    rest = stem[len("final_"):]
+    for slug in KNOWN_SLUGS:
+        if rest == slug:
+            return (1, slug)
+        m = re.fullmatch(rf"(\d+)_{re.escape(slug)}", rest)
+        if m:
+            return (int(m.group(1)), slug)
+    return None
 
 _procs = {}   # run_id -> Popen
 
@@ -121,6 +136,7 @@ async def run(request):
     mode = body.get("mode", "pieces")   # pieces | art
     front = body.get("front"); back = body.get("back")
     combined = bool(body.get("combined"))
+    only = body.get("only") or []        # danh sách slug -> chỉ gen mảnh đó
     if not front or not Path(front).is_file():
         return web.json_response({"error": "chưa có ảnh front"}, status=400)
     rid = time.strftime("%Y%m%d-%H%M%S")
@@ -136,9 +152,38 @@ async def run(request):
             cmd += ["--combined"]
         elif back and Path(back).is_file():
             cmd += ["--back", back]
+        if only:
+            cmd += ["--only", ",".join(only)]
     p = subprocess.Popen(cmd, cwd=str(ROOT))
     _procs[rid] = p
     return web.json_response({"run": rid})
+
+
+async def regen(request):
+    """Gen lại 1 mảnh của 1 run cũ: dùng lại pieces.json (KHÔNG vision lại) -> chỉ gen slug đó."""
+    body = await request.json()
+    rid = body.get("run", ""); slug = body.get("slug", "")
+    try:
+        person = int(body.get("person", 1) or 1)
+    except (TypeError, ValueError):
+        person = 1
+    rundir = RUNS / rid
+    if not rundir.is_dir() or slug not in KNOWN_SLUGS:
+        return web.json_response({"error": "run/slug không hợp lệ"}, status=400)
+    pdir = rundir / f"person_{person}"
+    cache = pdir / "pieces.json"; front = pdir / "crop_front.png"
+    if not cache.is_file() or not front.is_file():
+        return web.json_response({"error": "thiếu pieces.json/crop để gen lẻ"}, status=400)
+    multi = len(list(rundir.glob("person_*.png"))) > 1
+    out = rundir / (f"final_{person}.png" if multi else "final.png")
+    cmd = [sys.executable, str(PIPELINE), "--pieces", "--front", str(front),
+           "--cache", str(cache), "--only", slug, "-o", str(out),
+           "--emit", str(pdir), "--log", str(rundir / "run.log")]
+    back = pdir / "crop_back.png"
+    if back.is_file():
+        cmd += ["--back", str(back)]
+    _procs[rid] = subprocess.Popen(cmd, cwd=str(ROOT))
+    return web.json_response({"ok": True, "run": rid})
 
 
 def _item(p, name):
@@ -157,8 +202,12 @@ def _list_images(rundir: Path):
             f = base / f"panel_{name}.png"
             if f.exists():
                 groups["panel"].append(_item(f, (tag + " " + name).strip()))
-    for f in sorted(rundir.glob("**/final*.png")):
-        groups["final"].append(_item(f, f.stem))
+    for f in sorted(rundir.glob("final*.png")):
+        it = _item(f, f.stem)
+        pp = _parse_piece(f.stem)
+        if pp:
+            it["person"], it["slug"] = pp     # -> UI gắn nút gen lại
+        groups["final"].append(it)
     return groups
 
 
@@ -220,7 +269,7 @@ def main():
     app.add_routes([
         web.get("/", index), web.get("/media", media), web.get("/reveal", reveal),
         web.post("/upload", upload), web.post("/fetch_url", fetch_url),
-        web.post("/run", run), web.get("/state", state),
+        web.post("/run", run), web.post("/regen", regen), web.get("/state", state),
         web.get("/codex/status", codex_status), web.post("/codex/login", codex_login),
         web.get("/codex/login/log", codex_login_log), web.post("/restart", restart),
     ])

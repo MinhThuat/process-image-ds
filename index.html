@@ -67,7 +67,12 @@
   /* mảnh nhỏ (crop/panel) vs thành phẩm */
   .lane.crop img{height:120px;width:auto}
   .lane.panel img{height:180px;width:auto}
-  .lane.final img{max-width:min(760px,92%);height:auto}
+  .lane.final img{height:240px;width:auto;max-width:100%}   /* đủ nhìn, file gốc vẫn full-size */
+  .piece .regen{position:absolute;top:-8px;right:-8px;z-index:2;width:24px;height:24px;
+    border-radius:50%;border:0;cursor:pointer;background:var(--thread);color:#fff;
+    font-size:14px;line-height:24px;box-shadow:0 1px 4px rgba(0,0,0,.5)}
+  .piece .regen:hover{background:var(--pin);color:#241a06}
+  .piece .regen:disabled{opacity:.6;cursor:default}
   .empty{color:var(--muted);font-size:13px;border:1px dashed var(--line);
     border-radius:8px;padding:26px;text-align:center}
 
@@ -175,6 +180,23 @@
     <label id="cbwrap" style="display:flex;gap:8px;align-items:center;margin-top:12px;cursor:pointer;font-size:13px;color:var(--chalk)">
       <input type="checkbox" id="cbcombined"> Ảnh mặt trước gồm CẢ 2 mặt (trước + sau trong 1 ảnh)
     </label>
+    <details id="onlywrap" style="margin-top:10px;font-size:12.5px;color:var(--chalk)">
+      <summary style="cursor:pointer;color:var(--muted)">Chỉ gen mảnh chọn (bỏ trống = tất cả)</summary>
+      <div id="onlyboxes" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px">
+        <b style="width:100%;color:var(--muted);font-weight:600">Áo + quần</b>
+        <label><input type="checkbox" data-slug="ao_truoc"> Áo trước</label>
+        <label><input type="checkbox" data-slug="ao_sau"> Áo sau</label>
+        <label><input type="checkbox" data-slug="tay_truoc"> Tay trước</label>
+        <label><input type="checkbox" data-slug="tay_sau"> Tay sau</label>
+        <label><input type="checkbox" data-slug="quan_truoc"> Quần trước</label>
+        <label><input type="checkbox" data-slug="quan_sau"> Quần sau</label>
+        <b style="width:100%;color:var(--muted);font-weight:600;margin-top:4px">Váy</b>
+        <label><input type="checkbox" data-slug="than_truoc"> Thân trước</label>
+        <label><input type="checkbox" data-slug="than_sau"> Thân sau</label>
+        <label><input type="checkbox" data-slug="ta_truoc"> Tà trước</label>
+        <label><input type="checkbox" data-slug="ta_sau"> Tà sau</label>
+      </div>
+    </details>
     <div class="drops" style="margin-top:14px">
       <div class="dz" id="dzf" data-k="front">
         <div class="ph"><div class="k">Ảnh chính (mặt trước)</div><div class="h">kéo-thả · dán Ctrl+V · bấm chọn — từ web hoặc máy</div></div>
@@ -219,6 +241,7 @@ const picks={front:null, back:null};
 function syncMode(){
   const pieces=mode==="pieces", combined=$("#cbcombined").checked;
   $("#cbwrap").style.display=pieces?"flex":"none";        // checkbox chỉ cho pieces
+  $("#onlywrap").style.display=pieces?"block":"none";     // chọn mảnh chỉ cho pieces
   $("#dzb").classList.toggle("off", !pieces || combined); // art / combined -> ẩn ảnh sau
 }
 $("#seg").addEventListener("click",e=>{
@@ -300,10 +323,11 @@ $("#go").addEventListener("click",async()=>{
   if(!picks.front){toastStat("⚠ chưa có ảnh mặt trước");return;}
   const combined=mode==="pieces"&&$("#cbcombined").checked;
   const back=(mode==="pieces"&&!combined)?picks.back:null;
+  const only=mode==="pieces"?[...document.querySelectorAll("#onlyboxes input:checked")].map(c=>c.dataset.slug):[];
   $("#go").disabled=true; $("#go").textContent="⏳ đang chạy…";
   ["#gcrop","#gpanel","#gfinal"].forEach(g=>$(g).innerHTML="");
   const r=await api("/run",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({mode,front:picks.front,back,combined})});
+    body:JSON.stringify({mode,front:picks.front,back,combined,only})});
   if(r.error){toastStat("⚠ "+r.error);resetGo();return;}
   run=r.run; startPoll();
 });
@@ -329,11 +353,28 @@ function renderLog(t){
   }).join("\n");
   el.scrollTop=el.scrollHeight;
 }
+const SLUG_LABEL={ao_truoc:"Áo trước",ao_sau:"Áo sau",quan_truoc:"Quần trước",quan_sau:"Quần sau",
+  tay_truoc:"Tay trước",tay_sau:"Tay sau",tay_trai_truoc:"Tay trái trước",tay_trai_sau:"Tay trái sau",
+  tay_phai_truoc:"Tay phải trước",tay_phai_sau:"Tay phải sau",than_truoc:"Thân váy trước",
+  than_sau:"Thân váy sau",ta_truoc:"Tà váy trước",ta_sau:"Tà váy sau"};
 function piece(im,pending,big){
-  return `<div class="piece ${big?'big':''} ${pending?'pending':''}"><span class="pin"></span>`+
+  const regen = im.slug ? `<button class="regen" title="Gen lại mảnh này (dùng mô tả cũ)" `+
+    `data-run="${run||''}" data-person="${im.person||1}" data-slug="${im.slug}">⟳</button>` : '';
+  const lbl = (im.slug && SLUG_LABEL[im.slug])
+    ? SLUG_LABEL[im.slug] + ((im.person>1)?(" · người "+im.person):"") : im.name;
+  return `<div class="piece ${big?'big':''} ${pending?'pending':''}"><span class="pin"></span>`+regen+
     `<img src="${im.src}" loading="lazy" data-p="${im.path||''}" title="Bấm để mở thư mục chứa ảnh">`+
-    `<div class="cap">${im.name}</div></div>`;
+    `<div class="cap">${lbl}</div></div>`;
 }
+// gen lại 1 mảnh (nút ⟳) -> /regen dùng lại mô tả cũ, không vision lại
+$("#gfinal").addEventListener("click",async e=>{
+  const b=e.target.closest(".regen"); if(!b)return;
+  e.stopPropagation(); b.disabled=true; b.textContent="…";
+  const r=await api("/regen",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({run:b.dataset.run,person:+b.dataset.person,slug:b.dataset.slug})});
+  if(r&&r.error){toastStat("⚠ "+r.error);b.disabled=false;b.textContent="⟳";return;}
+  toastStat("⟳ đang gen lại "+b.dataset.slug+"…"); startPoll();
+});
 function renderImgs(g){
   $("#gcrop").innerHTML = g.crop.length? g.crop.map(x=>piece(x)).join("")
      : '<div class="empty">chờ dola-seed tách mảnh…</div>';

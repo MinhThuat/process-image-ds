@@ -66,27 +66,32 @@ VMODELS = ["dola-seed-2-1-turbo-260628",  # model chính
 OA_MODEL = "byte-plus-seedream-4-5"
 
 # --- gen prompt: MẢNH VÁY (cắt cong) -> vẽ trên nền xám rồi cutout() theo silhouette ---
-FLAT = ("A 2D FLAT VECTOR sewing-pattern diagram, absolutely flat and symmetric, front view, on a "
-        "plain flat light grey background. SOLID FLAT COLOR FILL only, NO fabric texture, NO denim "
-        "weave, NO topstitching, NO gathers, NO ruffles, NO folds, NO wrinkles, NO shading, NO "
-        "gradient, NO drop shadow, NO 3D, completely matte. Clean flat color blocks with crisp edges, "
-        "like a technical flat CAD garment panel. No human body, no head, no arms, no legs.")
+# TRUNG THỰC: giữ nguyên chi tiết/bóng/hiệu ứng nổi giả-3D của họa tiết in, chỉ tách mảnh
+# (nền xám chỉ để cutout cắt silhouette, KHÔNG làm phẳng họa tiết).
+DRESS_FAITHFUL = (
+    "A single cut-and-sew garment PANEL laid flat, front view, on a plain flat light grey background and "
+    "NOTHING else (so the panel can be cut out cleanly). REPRODUCE the panel's printed artwork FAITHFULLY "
+    "exactly as in the reference photo — keep every colour, detail, shading, soft highlight and any raised "
+    "faux-3D / moulded look; do NOT flatten or simplify it into plain vector. No human body, no head, no "
+    "arms, no legs, no hanger, no mockup.")
 SHAPE_BODICE = " Shape: a sleeveless bodice tank panel like the second reference (shape guide)."
 SHAPE_FAN = (" Shape: a wide quarter-circle CIRCLE-SKIRT fan panel spread flat like the second "
              "reference (shape guide). Every band follows the curved arc, parallel to the curved hem.")
 
-# --- gen prompt: MẢNH ÁO/QUẦN (full-bleed) -> mỗi mảnh in tràn kín khung, không viền ---
+# --- gen prompt: MẢNH ÁO/QUẦN/TAY (full-bleed) -> mỗi mảnh in tràn kín khung, không viền ---
+# TRUNG THỰC: tái hiện y họa tiết in kể cả bóng/nổi/giả-3D, chỉ tách 1 panel & tràn mép.
 # Neo {base} = màu nền vải (parse từ desc): panel THƯA chi tiết thì model hay tô đen/void
-# vùng trơn -> ép "toàn khung là màu nền, vùng trơn giữ nguyên màu nền, cấm void/glow".
+# vùng trơn -> ép "vùng không họa tiết giữ màu nền, cấm void/glow".
 PANEL_BLEED = (
-    "A full-bleed textile PRINT for the {label} — the flat printed artwork of ONE panel only, NOT the "
-    "whole garment. The ENTIRE frame is this panel's fabric: its BASE colour is {base}, which FILLS the "
-    "whole image edge to edge; the listed graphics sit ON TOP of that base and every other area stays "
-    "{base}. Large plain areas MUST remain {base} — do NOT darken them, do NOT add any black void, glow, "
-    "vignette, gradient or spotlight anywhere. Zoom in so the print FILLS 100% of the frame and BLEEDS "
-    "OFF all four edges: NO margin, NO border, NO letterboxing, NO garment silhouette/outline, NO hood, "
-    "NO collar, NO cuffs, NO person, NO hanger, NO mockup. Flat solid colours only, crisp shapes, NO 3D, "
-    "NO shading, NO shadow, NO fabric texture, completely matte. The print of this panel: {desc}")
+    "A full-bleed textile PRINT for the {label} — the printed artwork of ONE panel only, isolated from "
+    "the whole garment. REPRODUCE this panel's printed artwork EXACTLY as in the reference photo: keep "
+    "every detail, colour, shading, soft highlight, bevel and the raised faux-3D / moulded-armour look; "
+    "do NOT flatten, simplify or turn it into plain vector. The panel's BASE fabric colour is {base} and "
+    "fills any area with no artwork (if white, use white); NEVER replace empty areas with black, void, "
+    "glow, vignette or transparency. Zoom in so the artwork FILLS 100% of the frame and BLEEDS OFF all "
+    "four edges: NO margin, NO border, NO letterboxing, NO garment silhouette/outline, NO hood, NO "
+    "collar, NO cuffs, NO person, NO hanger, NO mockup — just this one panel's print, corner to corner. "
+    "The print of this panel: {desc}")
 
 def _base_colour(desc):
     """Màu nền vải để neo prompt — vision luôn mở đầu desc bằng 'base <màu>; ...'."""
@@ -183,28 +188,31 @@ def seed_people(client, img):
     js, m = _vision(client, img, PEOPLE_PROMPT, need=("people",))
     return js["people"], (w, h), m
 
-# --- vision: PIECES = phân loại đồ + tả print từng mảnh (trước + sau) ---
+# --- vision: PIECES = phân loại đồ + tả print từng mảnh (mọi phần đều trước/sau) ---
 _PIECES_SCHEMA = (
-    "Classify the outfit, then describe each cut-and-sew PANEL as a concise flat-technical PRINT spec "
-    "(base colour + every graphic/motif and its position; colours as words or hex; no prose). "
-    "Return ONLY JSON. If it is a DRESS (one-piece, torso + skirt): "
-    '{"type":"dress","bodice_front":"..","skirt_front":"..","bodice_back":"..","skirt_back":".."}. '
+    "Classify the outfit, then describe each cut-and-sew PANEL as a concise flat-technical PRINT spec. "
+    "Every desc MUST start with 'base <colour>;' then every graphic/motif and its position (colours as "
+    "words or hex; no prose). If a detail looks raised/embossed/moulded/3D-shaded, note that. Return ONLY JSON. "
+    "If it is a DRESS (one-piece: sleeveless bodice + skirt): "
+    '{"type":"dress","bodice_front":"..","bodice_back":"..","skirt_front":"..","skirt_back":".."}. '
     "If it is a TOP + BOTTOM (a separate upper garment + pants/shorts): "
-    '{"type":"top_bottom","top_front":"..","sleeve":"..","pants_front":"..","top_back":"..","pants_back":".."}. '
-    "top_front/top_back = the TORSO/BODY panel of the upper garment only (EXCLUDE sleeves, hood, collar). "
-    "sleeve = ONE sleeve's print (base colour, cuff, any stripe/badge). "
-    "pants_front/pants_back = the pants legs panel.")
+    '{"type":"top_bottom","top_front":"..","top_back":"..","pants_front":"..","pants_back":"..",'
+    '"sleeves_same":true,"sl_front":"..","sl_back":"..","sr_front":"..","sr_back":".."}. '
+    "top_*/pants_* = the TORSO/BODY resp. LEGS panel (top EXCLUDES sleeves, hood, collar). "
+    "sl_front/sl_back = the LEFT sleeve's front-facing / back-facing print; sr_front/sr_back = the RIGHT "
+    "sleeve's. sleeves_same = true if both sleeves carry the SAME print (then sr_* may repeat sl_*), "
+    "false if the two sleeves clearly differ.")
 _PIECES_INTRO = {
     "infer": ("This photo shows the FRONT of a person's outfit. " + _PIECES_SCHEMA +
-              " Only the front is visible: INFER each *_back panel from the front — keep the same base "
-              "colour, yokes and trims, but a plainer body; drop front-only graphics/badges/zips unless "
-              "they clearly wrap around to the back."),
+              " Only the front is visible: INFER each *_back / *_sau panel from the front — keep the same "
+              "base colour, yokes and trims, but a plainer body; drop front-only graphics/badges/zips "
+              "unless they clearly wrap around to the back."),
     "two": ("You are given TWO photos of the SAME outfit: the FIRST image is the FRONT, the SECOND is "
             "the BACK. " + _PIECES_SCHEMA +
-            " Describe *_front panels from the first image and *_back panels from the second (real back)."),
+            " Describe front panels from the first image and back panels from the second (real back)."),
     "combined": ("This ONE photo shows the SAME outfit from TWO angles side by side: a FRONT view and a "
                  "BACK view. Decide which is which. " + _PIECES_SCHEMA +
-                 " Describe *_front panels from the front view and *_back panels from the back view (real back)."),
+                 " Describe front panels from the front view and back panels from the back view (real back)."),
 }
 
 def seed_pieces(client, imgs, source):
@@ -212,21 +220,74 @@ def seed_pieces(client, imgs, source):
     js, _ = _vision(client, imgs, _PIECES_INTRO[source], need=("type",))
     return js
 
-# mảnh áo+quần: (slug file, label gửi model, key JSON, mặt) — full-bleed
-_TB_SPECS = [
-    ("ao_truoc",   "front torso/body panel of the top (no sleeves, no hood)", "top_front",   "front"),
-    ("ao_sau",     "back torso/body panel of the top (no sleeves, no hood)",  "top_back",    "back"),
-    ("tay_ao",     "one sleeve",                                              "sleeve",      "front"),
-    ("quan_truoc", "front of the pants",                                      "pants_front", "front"),
-    ("quan_sau",   "back of the pants",                                       "pants_back",  "back"),
-]
-# mảnh váy: (slug file, shape prompt, ảnh shape-guide, key JSON, mặt) — cắt cong
-_DRESS_SPECS = [
-    ("than_truoc", SHAPE_BODICE, "shape_bodice.png", "bodice_front", "front"),
-    ("than_sau",   SHAPE_BODICE, "shape_bodice.png", "bodice_back",  "back"),
-    ("ta_truoc",   SHAPE_FAN,    "shape_fan.png",    "skirt_front",  "front"),
-    ("ta_sau",     SHAPE_FAN,    "shape_fan.png",    "skirt_back",   "back"),
-]
+# nhãn gửi model cho từng slug full-bleed (PANEL_BLEED {label})
+_BLEED_LABEL = {
+    "ao_truoc": "front torso/body panel of the top (no sleeves, no hood)",
+    "ao_sau":   "back torso/body panel of the top (no sleeves, no hood)",
+    "quan_truoc": "front of the pants", "quan_sau": "back of the pants",
+    "tay_truoc": "front-facing panel of the sleeve", "tay_sau": "back-facing panel of the sleeve",
+    "tay_trai_truoc": "front-facing panel of the LEFT sleeve", "tay_trai_sau": "back-facing panel of the LEFT sleeve",
+    "tay_phai_truoc": "front-facing panel of the RIGHT sleeve", "tay_phai_sau": "back-facing panel of the RIGHT sleeve",
+}
+
+def _pieces_plan(js):
+    """JSON vision -> danh sách mảnh cần gen: mỗi mảnh dict(slug, kind, desc, side[, shape, guide, label]).
+    kind='dress' (cắt cong) | 'bleed' (full-bleed). side='front'/'back' -> chọn ảnh ref."""
+    typ = (js.get("type") or "top_bottom").strip()
+    plan = []
+    if typ == "dress":
+        for slug, shape, guide, key, side in [
+            ("than_truoc", SHAPE_BODICE, "shape_bodice.png", "bodice_front", "front"),
+            ("than_sau",   SHAPE_BODICE, "shape_bodice.png", "bodice_back",  "back"),
+            ("ta_truoc",   SHAPE_FAN,    "shape_fan.png",    "skirt_front",  "front"),
+            ("ta_sau",     SHAPE_FAN,    "shape_fan.png",    "skirt_back",   "back"),
+        ]:
+            desc = js.get(key)
+            if desc:
+                plan.append(dict(slug=slug, kind="dress", desc=desc, side=side, shape=shape, guide=guide))
+        return plan
+    # top_bottom: thân áo + quần
+    for slug, key, side in [("ao_truoc", "top_front", "front"), ("ao_sau", "top_back", "back"),
+                            ("quan_truoc", "pants_front", "front"), ("quan_sau", "pants_back", "back")]:
+        desc = js.get(key)
+        if desc:
+            plan.append(dict(slug=slug, kind="bleed", desc=desc, side=side, label=_BLEED_LABEL[slug]))
+    # tay áo: giống -> 1 bộ trước/sau; khác -> trái + phải, mỗi bên trước/sau
+    if js.get("sleeves_same", True):
+        sleeves = [("tay_truoc", "sl_front", "front"), ("tay_sau", "sl_back", "back")]
+    else:
+        sleeves = [("tay_trai_truoc", "sl_front", "front"), ("tay_trai_sau", "sl_back", "back"),
+                   ("tay_phai_truoc", "sr_front", "front"), ("tay_phai_sau", "sr_back", "back")]
+    for slug, key, side in sleeves:
+        desc = js.get(key) or js.get(key.replace("sr_", "sl_"))   # thiếu tay phải -> mượn trái
+        if desc:
+            plan.append(dict(slug=slug, kind="bleed", desc=desc, side=side, label=_BLEED_LABEL[slug]))
+    return plan
+
+def _flatten_white(path):
+    """Mảnh full-bleed phải ĐỤC (nền vải thật). Codex đôi khi trả PNG có nền trắng = trong suốt
+    -> ghép phẳng lên trắng để không bị 'thủng' khi đặt lên mockup tối."""
+    # ponytail: ghép lên TRẮNG (màu vải phổ biến nhất); đồ nền tối hầu như không có vùng trong suốt.
+    im = Image.open(path)
+    if im.mode in ("RGBA", "LA") or "transparency" in im.info:
+        im = im.convert("RGBA")
+        bg = Image.new("RGB", im.size, (255, 255, 255))
+        bg.paste(im, mask=im.split()[-1])
+        bg.save(path)
+
+def _make_piece(spec, refs, work, out):
+    """Gen 1 mảnh theo spec -> file <out.stem>_<slug><suffix>. Váy: cắt cong (cutout); áo/quần/tay: full-bleed."""
+    dst = out.with_name(f"{out.stem}_{spec['slug']}{out.suffix}")
+    ref = refs[spec["side"]]
+    if spec["kind"] == "dress":
+        tmp = work / f"gen_{spec['slug']}.png"
+        gen_panel(DRESS_FAITHFUL + spec["shape"] + " " + spec["desc"], [ref, ASSETS / spec["guide"]], tmp)
+        cutout(tmp).save(dst)                               # cắt theo silhouette, nền trong suốt
+    else:
+        gen_panel(PANEL_BLEED.format(label=spec["label"], base=_base_colour(spec["desc"]), desc=spec["desc"]),
+                  [ref], dst)
+        _flatten_white(dst)                                 # full-bleed: đục, nền vải trắng
+    return dst
 
 # --- vision: ART = tả cả bộ (áo trên + quần dưới) ---
 OUTFIT_PROMPT = (
@@ -353,55 +414,38 @@ def cutout(path, T=12):
 
 
 # ---------- 4. workers từng người ----------
-def run_pieces_one(client, img, out, emit_sub="", back=None, combined=False):
+def run_pieces_one(client, img, out, emit_sub="", back=None, combined=False, only=None, cache=None):
     """1 người/1 trang phục -> mỗi mảnh 1 file.
       áo+quần: full-bleed chữ nhật. váy: cắt cong (cutout), nền trong suốt.
       mặt sau: back (2 ảnh) / combined (1 ảnh 2 mặt) -> lưng thật; else tự suy từ trước.
-      tay phải = lật ngang tay trái."""
+      only = chỉ gen các slug này; cache = nạp lại mô tả vision cũ, BỎ vision (gen lẻ)."""
     work = _workdir("pieces_", emit_sub)
-    if back:
-        source, vimgs = "two", [img, back]
-    elif combined:
-        source, vimgs = "combined", img
-    else:
-        source, vimgs = "infer", img
-    log("crop", "nhìn ảnh: phân loại đồ + tả print từng mảnh ...")
-    js = seed_pieces(client, vimgs, source)
-    typ = (js.get("type") or "top_bottom").strip()
     ref_front = work / "crop_front.png"; Image.open(img).save(ref_front)
     if back:
         ref_back = work / "crop_back.png"; Image.open(back).save(ref_back)
     else:
         ref_back = ref_front   # combined: ảnh chứa cả 2 mặt; infer: dùng ảnh trước làm style-ref
     refs = {"front": ref_front, "back": ref_back}
-    log("crop", f"loại: {typ}")
+    if cache:                                   # gen lẻ: dùng lại mô tả cũ, KHÔNG vision lại
+        js = json.loads(Path(cache).read_text(encoding="utf-8"))
+        log("crop", f"dùng lại mô tả cũ ({Path(cache).name})")
+    else:
+        source = "two" if back else ("combined" if combined else "infer")
+        vimgs = [img, back] if back else img
+        log("crop", "nhìn ảnh: phân loại đồ + tả print từng mảnh ...")
+        js = seed_pieces(client, vimgs, source)
+        (work / "pieces.json").write_text(json.dumps(js, ensure_ascii=False), encoding="utf-8")
+    typ = (js.get("type") or "top_bottom").strip()
+    tay = "" if typ == "dress" else f" | tay {'khác' if not js.get('sleeves_same', True) else 'giống'}"
+    log("crop", f"loại: {typ}{tay}")
+    plan = _pieces_plan(js)
+    if only:
+        want = set(only if isinstance(only, (list, tuple, set)) else str(only).split(","))
+        plan = [s for s in plan if s["slug"] in want]
     outs = []
-    if typ == "dress":
-        for slug, shape, guide, key, side in _DRESS_SPECS:
-            desc = js.get(key) or ""
-            if not desc:
-                continue
-            dst = out.with_name(f"{out.stem}_{slug}{out.suffix}")
-            tmp = work / f"gen_{slug}.png"
-            log("gen", f"gen mảnh váy {slug} (cắt cong) ...")
-            gen_panel(FLAT + shape + " " + desc, [refs[side], ASSETS / guide], tmp)
-            cutout(tmp).save(dst)               # cắt theo silhouette, nền trong suốt
-            outs.append(dst)
-    else:  # top_bottom (mặc định)
-        for slug, label, key, side in _TB_SPECS:
-            desc = js.get(key) or ""
-            if not desc:
-                continue
-            dst = out.with_name(f"{out.stem}_{slug}{out.suffix}")
-            log("gen", f"gen mảnh {slug} (in tràn) ...")
-            gen_panel(PANEL_BLEED.format(label=label, base=_base_colour(desc), desc=desc),
-                      [refs[side]], dst)
-            outs.append(dst)
-            if slug == "tay_ao":                # tay phải = lật ngang tay trái
-                dst2 = out.with_name(f"{out.stem}_tay_ao_2{out.suffix}")
-                Image.open(dst).transpose(Image.FLIP_LEFT_RIGHT).save(dst2)
-                outs.append(dst2)
-                log("gen", "mảnh tay_ao_2 = lật ngang tay_ao")
+    for spec in plan:
+        log("gen", f"gen mảnh {spec['slug']} ...")
+        outs.append(_make_piece(spec, refs, work, out))
     log("done", f"{len(outs)} mảnh: " + ", ".join(o.name for o in outs))
     return outs[0] if outs else out
 
@@ -454,15 +498,16 @@ def _run_perperson(img, out, worker, label, wprefix, **wkw):
     log("done", f"{label} {len(outs)}/{len(boxes)}: " + ", ".join(o.name for o in outs))
     return outs
 
-def run_pieces(front, out, back=None, combined=False):
-    """Tách mảnh. 1 ảnh (tự suy sau) -> tách từng người. --back/--combined -> 1 trang phục, lưng thật."""
-    if back or combined:
+def run_pieces(front, out, back=None, combined=False, only=None, cache=None):
+    """Tách mảnh. 1 ảnh (tự suy sau) -> tách từng người. --back/--combined -> 1 trang phục, lưng thật.
+    only = chỉ gen slug đã chọn; cache = gen lẻ dùng lại mô tả cũ (1 trang phục)."""
+    if back or combined or cache:
         client = _ark_client()
-        tag = "+sau thật (2 ảnh)" if back else "2-view (1 ảnh)"
+        tag = "gen lẻ (cache)" if cache else ("+sau thật (2 ảnh)" if back else "2-view (1 ảnh)")
         log("start", f"PIECES tách mảnh | {Path(front).name} | {tag}")
-        run_pieces_one(client, front, Path(out), back=back, combined=combined)
+        run_pieces_one(client, front, Path(out), back=back, combined=combined, only=only, cache=cache)
         return [Path(out)]
-    return _run_perperson(front, Path(out), run_pieces_one, "PIECES tách mảnh", "piecesset_")
+    return _run_perperson(front, Path(out), run_pieces_one, "PIECES tách mảnh", "piecesset_", only=only)
 
 def run_art(front, out):
     """Art phẳng: 1 bản vẽ nguyên bộ mặt trước. Tách từng người."""
@@ -479,9 +524,22 @@ def _selfcheck():
     for src in ("infer", "two", "combined"):
         pr = _PIECES_INTRO[src]
         assert '"type"' in pr and "top_back" in pr and "bodice_back" in pr, src
-    # mỗi loại đồ có đủ mảnh 2 mặt
-    assert {s[0] for s in _TB_SPECS} == {"ao_truoc", "ao_sau", "tay_ao", "quan_truoc", "quan_sau"}
-    assert {s[0] for s in _DRESS_SPECS} == {"than_truoc", "than_sau", "ta_truoc", "ta_sau"}
+    # plan: váy -> 4 mảnh; tay giống -> 6 (tay_truoc/sau); tay khác -> 8 (trái/phải × trước/sau)
+    d = _pieces_plan({"type": "dress", "bodice_front": "base a", "bodice_back": "b",
+                      "skirt_front": "c", "skirt_back": "d"})
+    assert [s["slug"] for s in d] == ["than_truoc", "than_sau", "ta_truoc", "ta_sau"]
+    assert all(s["kind"] == "dress" for s in d)
+    tb = dict(type="top_bottom", top_front="base white", top_back="b", pants_front="c", pants_back="d",
+              sl_front="e", sl_back="f", sr_front="g", sr_back="h")
+    same = _pieces_plan({**tb, "sleeves_same": True})
+    assert {s["slug"] for s in same} == {"ao_truoc", "ao_sau", "quan_truoc", "quan_sau", "tay_truoc", "tay_sau"}
+    diff = _pieces_plan({**tb, "sleeves_same": False})
+    assert {s["slug"] for s in diff} == {"ao_truoc", "ao_sau", "quan_truoc", "quan_sau",
+                                         "tay_trai_truoc", "tay_trai_sau", "tay_phai_truoc", "tay_phai_sau"}
+    # flatten: PNG trong suốt -> đục nền trắng (mảnh full-bleed không bị thủng)
+    q = Path(tempfile.mktemp(suffix=".png")); Image.new("RGBA", (4, 4), (10, 20, 30, 0)).save(q)
+    _flatten_white(q)
+    assert Image.open(q).convert("RGB").getpixel((0, 0)) == (255, 255, 255)
     # neo màu nền: parse 'base <màu>' để ép panel thưa không tô đen/void
     assert _base_colour("base white; yoke yellow") == "white"
     assert _base_colour("base mustard yellow #E6A817; x") == "mustard yellow #E6A817"
@@ -499,6 +557,8 @@ if __name__ == "__main__":
                     help="tách từng mảnh (auto váy/áo-quần), full-bleed, tách người, tự suy mặt sau")
     ap.add_argument("--art", action="store_true",
                     help="1 bản vẽ phẳng nguyên bộ mặt trước; tách từng người")
+    ap.add_argument("--only", help="pieces: CHỈ gen các slug này (vd ao_truoc,quan_sau)")
+    ap.add_argument("--cache", help="pieces: nạp lại mô tả vision cũ (pieces.json), BỎ vision -> gen lẻ")
     ap.add_argument("-o", "--out", default="flat_out.png")
     ap.add_argument("--log", help="file ghi log (mặc định: <out>.log cạnh output)")
     ap.add_argument("--emit", help="ghi crop/mảnh vào thư mục này (cho UI web poll)")
@@ -515,6 +575,6 @@ if __name__ == "__main__":
         if a.art:
             run_art(a.front, out)
         else:                                   # mặc định: pieces
-            run_pieces(a.front, out, back=a.back, combined=a.combined)
+            run_pieces(a.front, out, back=a.back, combined=a.combined, only=a.only, cache=a.cache)
     else:
         ap.error("cần --front (+ --pieces hoặc --art), hoặc --selfcheck")
