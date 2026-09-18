@@ -87,6 +87,16 @@ AOP_FLAT = (
     "uniform fabric margin on every side (do NOT let the graphic touch the edges). No garment, no "
     "person, no head, no arms, no hanger, no mockup — just the flat colour field with the graphic.")
 
+# Mode OUTFIT: 1 bản vẽ kỹ thuật cả bộ (áo trên + quần dưới) trải phẳng, đủ chi tiết mặt trước.
+OUTFIT_FLAT = (
+    "A 2D FLAT technical fashion-flat drawing of a COMPLETE outfit laid flat, FRONT view, on a plain "
+    "light grey background. Draw the TOP garment and the BOTTOM garment as flat, symmetric garment "
+    "silhouettes, the top placed above the bottom, both fully visible. SOLID FLAT COLOR FILL only, "
+    "crisp clean edges like a technical CAD flat: NO fabric texture, NO 3D, NO shading, NO gradient, "
+    "NO shadow, NO folds/wrinkles. NO person, no head, no hands, no feet, no hanger, no mockup. "
+    "Redraw EVERY visible front detail faithfully in the right place and colour. "
+    "TOP garment: {top}. BOTTOM garment: {bottom}.")
+
 
 # ---------- 1. dola-seed vision: bbox + mô tả ----------
 def _ark_keys():
@@ -207,6 +217,22 @@ AOP_PROMPT = (
 def seed_aop(client, img):
     w, h = Image.open(img).size
     js, m = _vision(client, img, AOP_PROMPT, need=("graphic", "fabric"))
+    return js, (w, h), m
+
+OUTFIT_PROMPT = (
+    "This is a photo of a person wearing a full outfit (a top and a bottom). Describe the ENTIRE "
+    "outfit as a precise flat-technical spec so it can be redrawn as a fashion-flat. Return ONLY "
+    'JSON: {"top":{"desc":"..."},"bottom":{"desc":"..."}}. '
+    "top.desc = the upper garment: its type (hoodie/tee/jacket/etc.), base fabric colour, and EVERY "
+    "visible FRONT detail with colours and positions — chest graphics/panels, buttons, badges, "
+    "pockets, zipper, hood, collar, sleeve prints, cuffs. "
+    "bottom.desc = the lower garment: its type (pants/shorts/skirt), base colour, and every visible "
+    "front detail — knee patches, side stripes, pockets, waistband, hems. "
+    "Colours as words or hex. Be specific and positional; no prose outside the spec.")
+
+def seed_outfit(client, img):
+    w, h = Image.open(img).size
+    js, m = _vision(client, img, OUTFIT_PROMPT, need=("top", "bottom"))
     return js, (w, h), m
 
 PEOPLE_PROMPT = (
@@ -542,6 +568,52 @@ def run_aop(img, out):
     return outs
 
 
+def run_outfit_one(client, img, out, emit_sub=""):
+    """1 người: vision tả cả bộ (áo+quần) -> gen 1 bản vẽ phẳng cả bộ, mặt trước."""
+    work = _workdir("outfit_", emit_sub)
+    log("crop", "nhìn ảnh: tả chi tiết áo + quần ...")
+    js, _, _ = seed_outfit(client, img)
+    top = js["top"].get("desc", "") if isinstance(js["top"], dict) else str(js["top"])
+    bot = js["bottom"].get("desc", "") if isinstance(js["bottom"], dict) else str(js["bottom"])
+    log("crop", f"áo: {top[:60]}… | quần: {bot[:60]}…")
+    ref = work / "crop_outfit.png"
+    Image.open(img).save(ref)                       # cả ảnh người làm tham chiếu chi tiết
+    log("gen", "gen bản vẽ phẳng cả bộ ...")
+    gen_panel(OUTFIT_FLAT.format(top=top, bottom=bot), [ref], out)
+    log("done", str(out))
+    return out
+
+def run_outfit(img, out):
+    """Bản vẽ phẳng cả bộ (áo+quần), mặt trước. Tách từng người -> mỗi người 1 bản (out_1..N)."""
+    log("start", f"OUTFIT phẳng cả bộ | {Path(img).name}")
+    clients = _ark_clients()
+    log("detect", "nhìn ảnh, tách từng người ...")
+    boxes, wh, _ = seed_people(clients[0], img)
+    log("detect", f"phát hiện {len(boxes)} người")
+    work = _workdir("outfitset_")
+    single = len(boxes) == 1
+
+    def one(i, box):
+        person = work / f"person_{i}.png"
+        crop_norm(img, box, wh, person)
+        dst = out if single else out.with_name(f"{out.stem}_{i}{out.suffix}")
+        log("person", f"=== {i}/{len(boxes)} -> {dst.name} ===")
+        try:
+            return run_outfit_one(clients[(i - 1) % len(clients)], str(person), dst, emit_sub=f"person_{i}")
+        except Exception as e:
+            log("person", f"  người {i} lỗi, bỏ qua: {str(e)[:140]}")
+            return None
+
+    items = list(enumerate(boxes, 1))
+    if len(items) > 1 and len(clients) > 1:
+        with ThreadPoolExecutor(max_workers=min(len(clients), len(items))) as ex:
+            outs = [d for d in ex.map(lambda t: one(*t), items) if d]
+    else:
+        outs = [d for d in (one(i, b) for i, b in items) if d]
+    log("done", f"OUTFIT {len(outs)}/{len(boxes)}: " + ", ".join(o.name for o in outs))
+    return outs
+
+
 def _selfcheck():
     # crop_norm scale/clamp: 0-1000 -> pixel, clamp trong khung, tự sửa thứ tự
     im = Image.new("RGB", (1000, 500), "white")
@@ -560,6 +632,8 @@ if __name__ == "__main__":
                     help="1 ảnh chứa cả view trước+sau của cùng 1 váy: dùng lưng thật")
     ap.add_argument("--aop", action="store_true",
                     help="in tràn mặt trước: nền màu vải + graphic (mọi trang phục); tách từng người")
+    ap.add_argument("--outfit", action="store_true",
+                    help="1 bản vẽ phẳng cả bộ (áo+quần) đủ chi tiết mặt trước; tách từng người")
     ap.add_argument("-o", "--out", default="flat_out.png")
     ap.add_argument("--log", help="file ghi log (mặc định: <out>.log cạnh output)")
     ap.add_argument("--emit", help="ghi crop/panel/final vào thư mục này (cho UI web poll)")
@@ -575,7 +649,9 @@ if __name__ == "__main__":
         out = Path(a.out)
         logpath = _open_log(a.log or out.with_suffix(".log"))
         log("start", f"log -> {logpath}")
-        if a.aop:
+        if a.outfit:
+            run_outfit(a.front, out)
+        elif a.aop:
             run_aop(a.front, out)
         elif a.multi:
             run_multi(a.front, out)
