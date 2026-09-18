@@ -97,14 +97,14 @@ OUTFIT_FLAT = (
     "Redraw EVERY visible front detail faithfully in the right place and colour. "
     "TOP garment: {top}. BOTTOM garment: {bottom}.")
 
-# Mode PIECES: dàn từng MẢNH rập (thân/tay/mũ/túi/ống) tách rời trên 1 sheet xám.
-PIECES_FLAT = (
-    "A 2D FLAT technical cut-and-sew PATTERN-PIECE layout on a plain light grey background. "
-    "Draw the outfit DECONSTRUCTED into its separate FRONT pattern pieces. Each piece is a flat, "
-    "symmetric silhouette with SOLID FLAT COLOR fill — no fabric texture, no 3D, no shading, no "
-    "shadow, no person, no head, no hands, no feet. Arrange the pieces SEPARATELY with clear gaps, "
-    "neatly like a real sewing-pattern sheet, none overlapping. Redraw each piece faithfully with "
-    "its own front details in the right colours and positions. Pieces to draw:\n{pieces}")
+# Mode PIECES: mỗi MẢNH (áo trước / tay / áo sau / quần) là 1 ảnh IN TRÀN kín khung, không viền.
+PANEL_BLEED = (
+    "A full-bleed textile PRINT for the {label} — this is the flat printed artwork of ONE panel only, "
+    "NOT the whole garment. Show ONLY that panel's print, ZOOMED IN so the artwork FILLS 100% of the "
+    "frame and BLEEDS OFF all four edges. Absolutely NO white or empty background, NO margin, NO border, "
+    "NO garment silhouette/outline, NO hood, NO sleeves, NO collar, NO cuffs, NO person, NO hanger, NO "
+    "mockup — the coloured print must cover the entire image corner to corner. Flat solid colours, crisp "
+    "shapes, NO 3D, NO shading, NO shadow, NO fabric texture. The print of this panel: {desc}")
 
 
 # ---------- 1. dola-seed vision: bbox + mô tả ----------
@@ -244,19 +244,27 @@ def seed_outfit(client, img):
     js, m = _vision(client, img, OUTFIT_PROMPT, need=("top", "bottom"))
     return js, (w, h), m
 
-PIECES_PROMPT = (
-    "This photo shows a person in a full outfit (top + bottom). List the FRONT cut-and-sew PATTERN "
-    "PIECES of the outfit that are visible, so they can be drawn as a flat sewing-pattern sheet. "
-    'Return ONLY JSON: {"pieces":[{"name":"...","desc":"..."}, ...]}. '
-    "name = short piece slug (e.g. front_body, sleeve, hood, pocket, pant_front_leg, waistband, cuff). "
-    "desc = flat spec of that ONE piece: its shape + every colour/graphic/detail ON that piece with "
-    "positions. Only pieces visible from the front; ONE entry per mirrored pair (one sleeve, one leg). "
-    "Order the top's pieces first, then the bottom's.")
+PANELS_PROMPT = (
+    "This photo shows a person in an outfit. Describe the FULL print of each cut-and-sew panel so each "
+    "can be printed edge-to-edge (full bleed). Return ONLY JSON: "
+    '{"front_top":"...","sleeve":"...","pants":"..."}. '
+    "front_top = ONLY the TORSO/BODY front panel of the upper garment (shoulders to hem), EXCLUDING "
+    "sleeves, hood and collar — describe the print covering just that torso panel: base colour + every "
+    "graphic/detail/colour and its position. "
+    "sleeve = ONE sleeve's print only (base colour, cuff, any badge/stripe), excluding the body. "
+    "pants = the front of the lower garment (legs/torso of the pants): base colour + every detail "
+    "(knee patches, stripes, pockets). Be specific and positional; colours as words or hex. If a part is "
+    "not visible, still give its base colour.")
 
-def seed_pieces(client, img):
+# key -> (nhãn tên file, label mô tả gửi model)
+PANEL_KEYS = [("ao_truoc", "front torso/body panel of the top (no sleeves, no hood)", "front_top"),
+              ("tay_ao",   "one sleeve",                                              "sleeve"),
+              ("quan",     "front of the pants",                                      "pants")]
+
+def seed_panels(client, img):
     w, h = Image.open(img).size
-    js, m = _vision(client, img, PIECES_PROMPT, need=("pieces",))
-    return js["pieces"], (w, h), m
+    js, m = _vision(client, img, PANELS_PROMPT, need=("front_top",))
+    return js, (w, h), m
 
 PEOPLE_PROMPT = (
     "This photo shows several people standing in a row, each wearing a dress. Return ONLY JSON "
@@ -612,22 +620,29 @@ def run_outfit_one(client, img, out, emit_sub=""):
     return out
 
 def run_pieces_one(client, img, out, emit_sub=""):
-    """1 người: vision liệt kê từng mảnh -> gen 1 sheet dàn các mảnh rập tách rời."""
+    """1 người: mỗi mảnh (áo trước / tay / quần) là 1 ảnh IN TRÀN kín khung, không viền.
+    Tay phải = lật ngang tay trái. (Mặt sau áo: cần ảnh sau — chưa hỗ trợ ở luồng này.)"""
     work = _workdir("pieces_", emit_sub)
-    log("crop", "nhìn ảnh: liệt kê từng mảnh rập ...")
-    pieces, _, _ = seed_pieces(client, img)
-    if not pieces:
-        raise RuntimeError("không nhận ra mảnh nào")
-    names = [str(p.get("name", "piece")) for p in pieces]
-    log("crop", f"{len(pieces)} mảnh: {', '.join(names)}")
-    lines = "\n".join(f"{i}) {p.get('name','piece').upper()}: {p.get('desc','')}"
-                      for i, p in enumerate(pieces, 1))
+    log("crop", "nhìn ảnh: tả print từng mảnh (áo trước/tay/quần) ...")
+    js, _, _ = seed_panels(client, img)
     ref = work / "crop_outfit.png"
     Image.open(img).save(ref)
-    log("gen", "gen sheet các mảnh rập ...")
-    gen_panel(PIECES_FLAT.format(pieces=lines), [ref], out)
-    log("done", str(out))
-    return out
+    outs = []
+    for slug, label, jskey in PANEL_KEYS:
+        desc = js.get(jskey) or ""
+        if not desc:
+            continue
+        dst = out.with_name(f"{out.stem}_{slug}{out.suffix}")
+        log("gen", f"gen mảnh {slug} (in tràn) ...")
+        gen_panel(PANEL_BLEED.format(label=label, desc=desc), [ref], dst)
+        outs.append(dst)
+        if slug == "tay_ao":                       # tay phải = lật ngang tay trái
+            dst2 = out.with_name(f"{out.stem}_tay_ao_2{out.suffix}")
+            Image.open(dst).transpose(Image.FLIP_LEFT_RIGHT).save(dst2)
+            outs.append(dst2)
+            log("gen", "mảnh tay_ao_2 = lật ngang tay_ao")
+    log("done", f"{len(outs)} mảnh: " + ", ".join(o.name for o in outs))
+    return outs[0] if outs else out
 
 def run_outfit(img, out):
     """1 bản vẽ phẳng cả bộ (áo+quần) mặt trước. Tách từng người -> out_1..N."""
