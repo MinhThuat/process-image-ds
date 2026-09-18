@@ -76,6 +76,17 @@ SHAPE_BODICE = " Shape: a sleeveless bodice tank panel like the second reference
 SHAPE_FAN = (" Shape: a wide quarter-circle CIRCLE-SKIRT fan panel spread flat like the second "
              "reference (shape guide). Every band follows the curved arc, parallel to the curved hem.")
 
+# Mode AOP: 1 tấm in tràn mặt trước = nền màu vải + graphic vẽ phẳng (không váy/panel/người).
+AOP_FLAT = (
+    "A flat all-over-print (AOP) artwork panel for cut-and-sew apparel, PORTRAIT orientation. "
+    "The ENTIRE background is ONE solid uniform flat colour {fabric} filling the whole frame edge "
+    "to edge, perfectly smooth and UNBROKEN — absolutely NO vertical line, NO seam, NO zipper, NO "
+    "fold or crease anywhere, no gradient, no vignette, no texture, no fabric weave, no shadow. "
+    "Redraw ONLY this printed front graphic, clean and crisp as a real print: {desc}. Place it "
+    "CENTERED in the upper-middle, occupying roughly the central third of the width, with generous "
+    "uniform fabric margin on every side (do NOT let the graphic touch the edges). No garment, no "
+    "person, no head, no arms, no hanger, no mockup — just the flat colour field with the graphic.")
+
 
 # ---------- 1. dola-seed vision: bbox + mô tả ----------
 def _ark_keys():
@@ -183,6 +194,20 @@ def seed_two_images(client, front, back):
     """Gộp front+back vào 1 request (tránh ARK serialize 2 request rời)."""
     js, m = _vision(client, [front, back], TWO_IMG_PROMPT, need=("front", "back"))
     return js, m
+
+AOP_PROMPT = (
+    "This is a photo of a person wearing a garment with a big printed graphic on the FRONT "
+    "(chest/torso). Return ONLY JSON: "
+    '{"graphic":{"box":[x0,y0,x1,y1],"desc":"..."},"fabric":"#rrggbb"}. '
+    "box = TIGHT bounding box of the printed front graphic, integers normalized 0-1000 (x from left, "
+    "y from top); exclude head, arms, legs and background. desc = concise flat spec of the graphic "
+    "(colors as words, shapes, motifs and their positions) so it can be redrawn cleanly. "
+    "fabric = hex colour of the base garment fabric (the plain cloth around the graphic).")
+
+def seed_aop(client, img):
+    w, h = Image.open(img).size
+    js, m = _vision(client, img, AOP_PROMPT, need=("graphic", "fabric"))
+    return js, (w, h), m
 
 PEOPLE_PROMPT = (
     "This photo shows several people standing in a row, each wearing a dress. Return ONLY JSON "
@@ -465,6 +490,58 @@ def run_multi(img, out):
     return outs
 
 
+def _hex_ok(s):
+    return bool(re.fullmatch(r"#?[0-9a-fA-F]{6}", (s or "").strip()))
+
+def run_aop_one(client, img, out, emit_sub=""):
+    """1 người: vision (graphic mặt trước + màu vải) -> gen thẳng 1 tấm AOP."""
+    work = _workdir("aop_", emit_sub)
+    log("crop", "nhìn ảnh: graphic mặt trước + màu vải ...")
+    js, wh, _ = seed_aop(client, img)
+    g = js["graphic"]; fabric = (js.get("fabric") or "").strip()
+    if not _hex_ok(fabric):
+        fabric = "#808080"
+    if not fabric.startswith("#"):
+        fabric = "#" + fabric
+    log("crop", f"graphic {g['box']} | vải {fabric}")
+    crop = work / "crop_graphic.png"
+    crop_norm(img, g["box"], wh, crop)
+    log("gen", "gen tấm AOP mặt trước ...")
+    gen_panel(AOP_FLAT.format(fabric=fabric, desc=g["desc"]), [crop], out)
+    log("done", str(out))
+    return out
+
+def run_aop(img, out):
+    """AOP mặt trước cho mọi trang phục. Tách từng người -> mỗi người 1 tấm (out_1..N)."""
+    log("start", f"AOP mặt trước | {Path(img).name}")
+    clients = _ark_clients()
+    log("detect", "nhìn ảnh, tách từng người ...")
+    boxes, wh, _ = seed_people(clients[0], img)
+    log("detect", f"phát hiện {len(boxes)} người")
+    work = _workdir("aopset_")
+    single = len(boxes) == 1
+
+    def one(i, box):
+        person = work / f"person_{i}.png"
+        crop_norm(img, box, wh, person)
+        dst = out if single else out.with_name(f"{out.stem}_{i}{out.suffix}")
+        log("person", f"=== {i}/{len(boxes)} -> {dst.name} ===")
+        try:
+            return run_aop_one(clients[(i - 1) % len(clients)], str(person), dst, emit_sub=f"person_{i}")
+        except Exception as e:
+            log("person", f"  người {i} lỗi, bỏ qua: {str(e)[:140]}")
+            return None
+
+    items = list(enumerate(boxes, 1))
+    if len(items) > 1 and len(clients) > 1:   # nhiều người + nhiều key -> song song
+        with ThreadPoolExecutor(max_workers=min(len(clients), len(items))) as ex:
+            outs = [d for d in ex.map(lambda t: one(*t), items) if d]
+    else:
+        outs = [d for d in (one(i, b) for i, b in items) if d]
+    log("done", f"AOP {len(outs)}/{len(boxes)}: " + ", ".join(o.name for o in outs))
+    return outs
+
+
 def _selfcheck():
     # crop_norm scale/clamp: 0-1000 -> pixel, clamp trong khung, tự sửa thứ tự
     im = Image.new("RGB", (1000, 500), "white")
@@ -481,6 +558,8 @@ if __name__ == "__main__":
                     help="ảnh nhóm nhiều người: tự tách từng người -> out_1..N")
     ap.add_argument("--twoviews", action="store_true",
                     help="1 ảnh chứa cả view trước+sau của cùng 1 váy: dùng lưng thật")
+    ap.add_argument("--aop", action="store_true",
+                    help="in tràn mặt trước: nền màu vải + graphic (mọi trang phục); tách từng người")
     ap.add_argument("-o", "--out", default="flat_out.png")
     ap.add_argument("--log", help="file ghi log (mặc định: <out>.log cạnh output)")
     ap.add_argument("--emit", help="ghi crop/panel/final vào thư mục này (cho UI web poll)")
@@ -496,7 +575,9 @@ if __name__ == "__main__":
         out = Path(a.out)
         logpath = _open_log(a.log or out.with_suffix(".log"))
         log("start", f"log -> {logpath}")
-        if a.multi:
+        if a.aop:
+            run_aop(a.front, out)
+        elif a.multi:
             run_multi(a.front, out)
         elif a.twoviews:
             run_twoviews(a.front, out)

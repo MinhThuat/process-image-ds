@@ -118,7 +118,7 @@ async def fetch_url(request):
 
 async def run(request):
     body = await request.json()
-    mode = body.get("mode", "single")   # single | back | twoviews | multi
+    mode = body.get("mode", "single")   # single | back | twoviews | multi | aop
     front = body.get("front"); back = body.get("back")
     if not front or not Path(front).is_file():
         return web.json_response({"error": "chưa có ảnh front"}, status=400)
@@ -134,6 +134,8 @@ async def run(request):
         cmd += ["--twoviews"]
     elif mode == "multi":
         cmd += ["--multi"]
+    elif mode == "aop":
+        cmd += ["--aop"]
     p = subprocess.Popen(cmd, cwd=str(ROOT))
     _procs[rid] = p
     return web.json_response({"run": rid})

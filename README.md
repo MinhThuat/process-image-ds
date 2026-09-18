@@ -21,7 +21,8 @@ start.bat 9000       REM đổi cổng
 
 ## Giao diện
 - **Bàn cắt (trên):** hiện real-time — mảnh crop → 4 panel gen → thành phẩm ghép.
-- **Bảng điều khiển (dưới):** chọn chế độ (1 ảnh / 2 ảnh / 2-view / nhóm), thả ảnh, bấm **Tạo rập**, xem **Nhật ký**.
+- **Bảng điều khiển (dưới):** chọn chế độ (1 ảnh / 2 ảnh / 2-view / nhóm / **In tràn**), thả ảnh, bấm **Tạo rập**, xem **Nhật ký**.
+  - **In tràn (AOP):** cho mọi trang phục — xuất 1 tấm phẳng = nền màu vải + graphic mặt trước (không tách panel). Ảnh nhiều người → mỗi người 1 tấm.
 - **Badge codex hết hạn:** hiện nút *Đăng nhập lại* (chạy `codex login`, hiện URL/mã) khi phát hiện codex lỗi auth.
 
 ## Pipeline (lõi)
