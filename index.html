@@ -169,21 +169,19 @@
   <div class="field">
     <div class="lbl disp">Chế độ</div>
     <div class="seg" id="seg">
-      <button data-m="single" class="on">1 ảnh<small>tự suy mặt sau</small></button>
-      <button data-m="back">2 ảnh<small>trước + sau riêng</small></button>
-      <button data-m="twoviews">2-view<small>1 ảnh có cả 2 mặt</small></button>
-      <button data-m="multi">Nhóm<small>nhiều người → nhiều file</small></button>
-      <button data-m="aop">In tràn<small>nền màu vải + graphic mặt trước</small></button>
-      <button data-m="outfit">Cả bộ<small>vẽ phẳng áo+quần, đủ chi tiết</small></button>
-      <button data-m="pieces">Tách mảnh<small>thân/tay/mũ/ống rời trên 1 sheet</small></button>
+      <button data-m="pieces" class="on">Tách mảnh<small>auto váy/áo-quần · full-bleed · mỗi mảnh 1 ảnh</small></button>
+      <button data-m="art">Art phẳng<small>1 bản vẽ nguyên bộ, mặt trước</small></button>
     </div>
+    <label id="cbwrap" style="display:flex;gap:8px;align-items:center;margin-top:12px;cursor:pointer;font-size:13px;color:var(--chalk)">
+      <input type="checkbox" id="cbcombined"> Ảnh mặt trước gồm CẢ 2 mặt (trước + sau trong 1 ảnh)
+    </label>
     <div class="drops" style="margin-top:14px">
       <div class="dz" id="dzf" data-k="front">
         <div class="ph"><div class="k">Ảnh chính (mặt trước)</div><div class="h">kéo-thả · dán Ctrl+V · bấm chọn — từ web hoặc máy</div></div>
         <div class="pv" hidden></div>
         <input type="file" id="ff" accept="image/*" hidden></div>
-      <div class="dz off" id="dzb" data-k="back">
-        <div class="ph"><div class="k">Ảnh mặt sau</div><div class="h">chỉ cho chế độ “2 ảnh” · kéo-thả / dán / chọn</div></div>
+      <div class="dz" id="dzb" data-k="back">
+        <div class="ph"><div class="k">Ảnh mặt sau (tùy chọn)</div><div class="h">có → dùng lưng thật · kéo-thả / dán / chọn</div></div>
         <div class="pv" hidden></div>
         <input type="file" id="fb" accept="image/*" hidden></div>
     </div>
@@ -192,8 +190,8 @@
   <div class="field">
     <div class="lbl disp">Chạy</div>
     <div class="mono" style="font-size:12px;color:var(--muted);line-height:1.6">
-      Pipeline: <b style="color:var(--chalk)">dola-seed</b> nhìn+crop →
-      <b style="color:var(--chalk)">chatgpt-imagegen</b> (lỗi → OpenArt) → cắt nền + ghép.
+      Pipeline: <b style="color:var(--chalk)">dola-seed</b> phân loại + tả mảnh →
+      <b style="color:var(--chalk)">chatgpt-imagegen</b> (lỗi → OpenArt) → xuất từng mảnh.
     </div>
     <button class="go" id="go">✂ Tạo rập</button>
     <div id="stat" class="mono" style="font-size:11.5px;color:var(--muted);margin-top:8px"></div>
@@ -214,16 +212,22 @@ async function apiT(u,o={},ms=45000){
   catch(e){ throw new Error(e.name==="AbortError"?"quá thời gian, thử lại":e.message); }
   finally{ clearTimeout(t); }
 }
-let mode="single", run=null, poll=null;
+let mode="pieces", run=null, poll=null;
 const picks={front:null, back:null};
 
 // ---- mode segmented ----
+function syncMode(){
+  const pieces=mode==="pieces", combined=$("#cbcombined").checked;
+  $("#cbwrap").style.display=pieces?"flex":"none";        // checkbox chỉ cho pieces
+  $("#dzb").classList.toggle("off", !pieces || combined); // art / combined -> ẩn ảnh sau
+}
 $("#seg").addEventListener("click",e=>{
   const b=e.target.closest("button"); if(!b)return;
   [...$("#seg").children].forEach(x=>x.classList.toggle("on",x===b));
-  mode=b.dataset.m;
-  $("#dzb").classList.toggle("off",mode!=="back");
+  mode=b.dataset.m; syncMode();
 });
+$("#cbcombined").addEventListener("change",syncMode);
+syncMode();
 
 // ---- dropzones: file / kéo-thả (web+local) / dán Ctrl+V / xóa ----
 let active={dz:$("#dzf"),key:"front"};   // vùng nhận khi dán (paste)
@@ -294,11 +298,12 @@ document.addEventListener("paste",e=>{
 // ---- run ----
 $("#go").addEventListener("click",async()=>{
   if(!picks.front){toastStat("⚠ chưa có ảnh mặt trước");return;}
-  if(mode==="back"&&!picks.back){toastStat("⚠ chế độ 2 ảnh cần cả ảnh mặt sau");return;}
+  const combined=mode==="pieces"&&$("#cbcombined").checked;
+  const back=(mode==="pieces"&&!combined)?picks.back:null;
   $("#go").disabled=true; $("#go").textContent="⏳ đang chạy…";
   ["#gcrop","#gpanel","#gfinal"].forEach(g=>$(g).innerHTML="");
   const r=await api("/run",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({mode,front:picks.front,back:picks.back})});
+    body:JSON.stringify({mode,front:picks.front,back,combined})});
   if(r.error){toastStat("⚠ "+r.error);resetGo();return;}
   run=r.run; startPoll();
 });

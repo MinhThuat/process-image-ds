@@ -118,28 +118,24 @@ async def fetch_url(request):
 
 async def run(request):
     body = await request.json()
-    mode = body.get("mode", "single")   # single | back | twoviews | multi | aop
+    mode = body.get("mode", "pieces")   # pieces | art
     front = body.get("front"); back = body.get("back")
+    combined = bool(body.get("combined"))
     if not front or not Path(front).is_file():
         return web.json_response({"error": "chưa có ảnh front"}, status=400)
     rid = time.strftime("%Y%m%d-%H%M%S")
     rundir = RUNS / rid; rundir.mkdir(parents=True, exist_ok=True)
-    scale = body.get("scale", 1)
     cmd = [sys.executable, str(PIPELINE), "--front", front,
            "-o", str(rundir / "final.png"), "--emit", str(rundir),
-           "--log", str(rundir / "run.log"), "--scale", str(scale)]
-    if mode == "back" and back:
-        cmd += ["--back", back]
-    elif mode == "twoviews":
-        cmd += ["--twoviews"]
-    elif mode == "multi":
-        cmd += ["--multi"]
-    elif mode == "aop":
-        cmd += ["--aop"]
-    elif mode == "outfit":
-        cmd += ["--outfit"]
-    elif mode == "pieces":
+           "--log", str(rundir / "run.log")]
+    if mode == "art":
+        cmd += ["--art"]
+    else:                                # pieces (mặc định)
         cmd += ["--pieces"]
+        if combined:
+            cmd += ["--combined"]
+        elif back and Path(back).is_file():
+            cmd += ["--back", back]
     p = subprocess.Popen(cmd, cwd=str(ROOT))
     _procs[rid] = p
     return web.json_response({"run": rid})

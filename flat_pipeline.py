@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 """
-Ảnh váy mặc thật -> layout cắt-may PHẲNG (all-over-print). MỘT script, KHÔNG cần Claude Code.
+Ảnh trang phục mặc thật -> các MẢNH rập PHẲNG rời (cut-and-sew, in tràn). MỘT script.
 
-Pipeline:
-  1. dola-seed (Doubao/Seed vision, BytePlus ARK) NHÌN ảnh -> bbox bodice/skirt + tự mô tả hoạ tiết
-  2. crop theo bbox
-  3. gen 4 panel phẳng từ crop + shape guide:
-       primary = chatgpt-imagegen (backend codex), lỗi -> fallback OpenArt CLI (Seedream 4.5)
-  4. cutout (ngưỡng nền) + ghép lên template xám
+2 mode duy nhất (không ghép thành phẩm cuối nữa — xuất từng miếng):
+  --pieces : auto nhận VÁY vs ÁO+QUẦN -> mỗi mảnh 1 file.
+             * áo/quần: full-bleed chữ nhật (tràn kín khung, nền vải kể cả trắng)
+             * váy    : cắt theo silhouette cong thật (nền ngoài trong suốt)
+             mặt sau: 1 ảnh -> tự suy từ họa tiết trước; --back (2 ảnh) / --combined
+             (1 ảnh có cả 2 mặt) -> dùng lưng THẬT. Tách từng người (song song đa key).
+  --art    : 1 bản vẽ CAD phẳng nguyên bộ, mặt trước. Tách từng người.
 
-Fallback: vision có VMODELS (seed-2-0-pro -> lite -> 1-6); gen có chatgpt-imagegen -> OpenArt.
+Pipeline: dola-seed (BytePlus ARK) NHÌN ảnh -> phân loại + tả print từng mảnh ->
+gen (primary chatgpt-imagegen/codex, lỗi -> OpenArt Seedream 4.5).
 
 Chạy:
-  python3 flat_pipeline.py --front front.png [--back back.png] -o out.png
-  # không có --back  -> dùng luôn ảnh front cho mặt sau (mô tả "plain back")
-  python3 flat_pipeline.py --selfcheck        # kiểm tra logic scale/clamp toạ độ
+  python3 flat_pipeline.py --pieces --front f.png [--back b.png | --combined] -o out.png
+  python3 flat_pipeline.py --art    --front f.png -o out.png
+  python3 flat_pipeline.py --selfcheck
 
-Yêu cầu: codex đã đăng nhập (chatgpt-imagegen/dangnhap-codex.sh) + `openart login`;
-         ARK_API_KEY (env hoặc chatgpt-api/.env) cho bước vision seed.
+Yêu cầu: codex đã đăng nhập + `openart login`; ARK_API_KEY (env hoặc .env cạnh script).
 """
-import argparse, base64, io, json, mimetypes, os, re, subprocess, sys, tempfile, time
+import argparse, base64, io, json, os, re, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -39,8 +40,7 @@ def log(stage, msg=""):
     if _LOGF:
         _LOGF.write(line + "\n"); _LOGF.flush()
 
-EMIT = None   # nếu set: crop/panel/final ghi thẳng vào thư mục này (cho UI web poll)
-SCALE = 1.0   # hệ số phóng canvas ghép (1=2400x1900, 2=4800x3800, 3=7200x5700)
+EMIT = None   # nếu set: crop/panel ghi thẳng vào thư mục này (cho UI web poll)
 
 def _workdir(prefix, sub=""):
     """Thư mục làm việc: dùng EMIT (được serve) nếu có, không thì temp."""
@@ -51,12 +51,11 @@ def _workdir(prefix, sub=""):
     return Path(tempfile.mkdtemp(prefix=prefix))
 
 import cv2, numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 from scipy import ndimage
 
 HERE = Path(__file__).resolve().parent
 ASSETS = HERE / "assets"
-# CLI ngoài (không nằm trong folder này) — override bằng env nếu máy khác đặt chỗ khác
 VSC = Path(os.getenv("VSC_ROOT", "/mnt/6C96C1A096C16AE2/vsc"))
 # ưu tiên .env cạnh script (self-contained), không có thì dùng .env gốc của chatgpt-api
 _DEF_ENV = (HERE / ".env") if (HERE / ".env").exists() else (VSC / "chatgpt-api" / ".env")
@@ -65,8 +64,8 @@ ARK_BASE = "https://ark.ap-southeast.bytepluses.com/api/v3"
 VMODELS = ["dola-seed-2-1-turbo-260628",  # model chính
            "seed-2-0-pro-260328", "seed-2-0-lite-260228", "seed-1-6-250915"]  # fallback
 OA_MODEL = "byte-plus-seedream-4-5"
-BG = (228, 228, 228)
 
+# --- gen prompt: MẢNH VÁY (cắt cong) -> vẽ trên nền xám rồi cutout() theo silhouette ---
 FLAT = ("A 2D FLAT VECTOR sewing-pattern diagram, absolutely flat and symmetric, front view, on a "
         "plain flat light grey background. SOLID FLAT COLOR FILL only, NO fabric texture, NO denim "
         "weave, NO topstitching, NO gathers, NO ruffles, NO folds, NO wrinkles, NO shading, NO "
@@ -76,18 +75,25 @@ SHAPE_BODICE = " Shape: a sleeveless bodice tank panel like the second reference
 SHAPE_FAN = (" Shape: a wide quarter-circle CIRCLE-SKIRT fan panel spread flat like the second "
              "reference (shape guide). Every band follows the curved arc, parallel to the curved hem.")
 
-# Mode AOP: 1 tấm in tràn mặt trước = nền màu vải + graphic vẽ phẳng (không váy/panel/người).
-AOP_FLAT = (
-    "A flat all-over-print (AOP) artwork panel for cut-and-sew apparel, PORTRAIT orientation. "
-    "The ENTIRE background is ONE solid uniform flat colour {fabric} filling the whole frame edge "
-    "to edge, perfectly smooth and UNBROKEN — absolutely NO vertical line, NO seam, NO zipper, NO "
-    "fold or crease anywhere, no gradient, no vignette, no texture, no fabric weave, no shadow. "
-    "Redraw ONLY this printed front graphic, clean and crisp as a real print: {desc}. Place it "
-    "CENTERED in the upper-middle, occupying roughly the central third of the width, with generous "
-    "uniform fabric margin on every side (do NOT let the graphic touch the edges). No garment, no "
-    "person, no head, no arms, no hanger, no mockup — just the flat colour field with the graphic.")
+# --- gen prompt: MẢNH ÁO/QUẦN (full-bleed) -> mỗi mảnh in tràn kín khung, không viền ---
+# Neo {base} = màu nền vải (parse từ desc): panel THƯA chi tiết thì model hay tô đen/void
+# vùng trơn -> ép "toàn khung là màu nền, vùng trơn giữ nguyên màu nền, cấm void/glow".
+PANEL_BLEED = (
+    "A full-bleed textile PRINT for the {label} — the flat printed artwork of ONE panel only, NOT the "
+    "whole garment. The ENTIRE frame is this panel's fabric: its BASE colour is {base}, which FILLS the "
+    "whole image edge to edge; the listed graphics sit ON TOP of that base and every other area stays "
+    "{base}. Large plain areas MUST remain {base} — do NOT darken them, do NOT add any black void, glow, "
+    "vignette, gradient or spotlight anywhere. Zoom in so the print FILLS 100% of the frame and BLEEDS "
+    "OFF all four edges: NO margin, NO border, NO letterboxing, NO garment silhouette/outline, NO hood, "
+    "NO collar, NO cuffs, NO person, NO hanger, NO mockup. Flat solid colours only, crisp shapes, NO 3D, "
+    "NO shading, NO shadow, NO fabric texture, completely matte. The print of this panel: {desc}")
 
-# Mode OUTFIT: 1 bản vẽ kỹ thuật cả bộ (áo trên + quần dưới) trải phẳng, đủ chi tiết mặt trước.
+def _base_colour(desc):
+    """Màu nền vải để neo prompt — vision luôn mở đầu desc bằng 'base <màu>; ...'."""
+    m = re.match(r"\s*base\s+([^;.,]+)", desc or "", re.I)
+    return m.group(1).strip() if m else "the panel's own solid fabric colour"
+
+# --- gen prompt: ART PHẲNG (1 bản vẽ nguyên bộ, mặt trước) ---
 OUTFIT_FLAT = (
     "A 2D FLAT technical fashion-flat drawing of a COMPLETE outfit laid flat, FRONT view, on a plain "
     "light grey background. Draw the TOP garment and the BOTTOM garment as flat, symmetric garment "
@@ -97,17 +103,8 @@ OUTFIT_FLAT = (
     "Redraw EVERY visible front detail faithfully in the right place and colour. "
     "TOP garment: {top}. BOTTOM garment: {bottom}.")
 
-# Mode PIECES: mỗi MẢNH (áo trước / tay / áo sau / quần) là 1 ảnh IN TRÀN kín khung, không viền.
-PANEL_BLEED = (
-    "A full-bleed textile PRINT for the {label} — this is the flat printed artwork of ONE panel only, "
-    "NOT the whole garment. Show ONLY that panel's print, ZOOMED IN so the artwork FILLS 100% of the "
-    "frame and BLEEDS OFF all four edges. Absolutely NO white or empty background, NO margin, NO border, "
-    "NO garment silhouette/outline, NO hood, NO sleeves, NO collar, NO cuffs, NO person, NO hanger, NO "
-    "mockup — the coloured print must cover the entire image corner to corner. Flat solid colours, crisp "
-    "shapes, NO 3D, NO shading, NO shadow, NO fabric texture. The print of this panel: {desc}")
 
-
-# ---------- 1. dola-seed vision: bbox + mô tả ----------
+# ---------- 1. dola-seed vision ----------
 def _ark_keys():
     """Nhiều key -> vision chạy song song thật (ARK serialize theo key). Nạp từ
     ARK_API_KEYS='k1,k2,...' và/hoặc ARK_API_KEY, ARK_API_KEY2, ARK_API_KEY3..."""
@@ -137,17 +134,8 @@ def _ark_clients():
 def _ark_client():
     return _ark_clients()[0]
 
-def _data_uri(p):
-    mime = mimetypes.guess_type(p)[0] or "image/jpeg"
-    return f"data:{mime};base64," + base64.b64encode(Path(p).read_bytes()).decode()
-
-# Vision chỉ cần bbox (toạ độ 0-1000) + mô tả hoạ tiết -> gửi ảnh THU NHỎ cho nhanh,
-# không đổi kết quả (bbox chuẩn hoá). Ảnh gốc to gửi full-res chậm ~2 phút/lần.
+# Vision chỉ cần bbox/mô tả -> gửi ảnh THU NHỎ cho nhanh (không đổi kết quả chuẩn hoá).
 VISION_MAXSIDE = int(os.getenv("FLAT_VISION_MAXSIDE", "1152"))
-# số panel gen song song. codex gen song song ĐƯỢC khi token còn hạn; chỉ kẹt khi
-# token hết hạn và nhiều tiến trình cùng refresh (đua xoay refresh_token -> hỏng auth).
-# -> _gen_assemble chạy panel ĐẦU một mình để hâm nóng/refresh token rồi mới bung song song.
-GEN_WORKERS = int(os.getenv("FLAT_GEN_WORKERS", "4"))
 
 def _vision_uri(img, maxside=VISION_MAXSIDE):
     im = Image.open(img)
@@ -158,20 +146,10 @@ def _vision_uri(img, maxside=VISION_MAXSIDE):
     im.convert("RGB").save(buf, "JPEG", quality=85)
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
-VISION_PROMPT = (
-    "This is a photo of a person wearing a skater/skirt dress. Return ONLY JSON: "
-    '{"bodice":{"box":[x0,y0,x1,y1],"desc":"..."},"skirt":{"box":[x0,y0,x1,y1],"desc":"..."}}. '
-    "box = bounding box of that dress part, integers normalized 0-1000 (x from left, y from top). "
-    "bodice = top/torso panel (neckline to waist, exclude head/arms/background); "
-    "skirt = flared part below the waist (exclude legs/background). "
-    "desc = a concise flat-technical description of the PRINTED GRAPHIC on that part "
-    "(colors as words, bands top-to-bottom, motifs and their positions) so it can be redrawn as a "
-    "flat vector panel. No prose, just the spec.")
-
 def _vision(client, img, prompt, need=()):
     """Gọi vision với fallback qua VMODELS, log từng lần thử. `need` = key bắt buộc trong JSON.
     `img` là 1 đường dẫn HOẶC list nhiều đường dẫn (gộp vào 1 request — ARK serialize
-    theo key nên 1 request 2 ảnh nhanh hơn 2 request rời)."""
+    theo key nên 1 request nhiều ảnh nhanh hơn nhiều request rời)."""
     imgs = img if isinstance(img, (list, tuple)) else [img]
     content = [{"type": "text", "text": prompt}]
     for i in imgs:
@@ -193,83 +171,11 @@ def _vision(client, img, prompt, need=()):
             log("vision", f"lỗi {m}: {str(e)[:70]}")
     sys.exit(f"Vision lỗi hết model. Cuối: {last}")
 
-def seed_vision(client, img):
-    w, h = Image.open(img).size
-    js, m = _vision(client, img, VISION_PROMPT, need=("bodice", "skirt"))
-    return js, (w, h), m
-
-TWO_IMG_PROMPT = (
-    "You are given TWO separate photos of the SAME skater/skirt dress: the FIRST image is the "
-    "FRONT view, the SECOND image is the BACK view. Return ONLY JSON: "
-    '{"front":{"bodice":{"box":[x0,y0,x1,y1],"desc":"..."},"skirt":{"box":[..],"desc":".."}},'
-    '"back":{"bodice":{"box":[..],"desc":".."},"skirt":{"box":[..],"desc":".."}}}. '
-    "box = bounding box of that part WITHIN THAT image, integers normalized 0-1000 (x from left, "
-    "y from top). bodice = top/torso panel (neckline to waist, exclude head/arms/background); "
-    "skirt = flared part below the waist (exclude legs/background). desc = concise flat-technical "
-    "spec of the PRINTED GRAPHIC on that part (colors as words, bands top-to-bottom, motifs and "
-    "positions) to redraw as a flat vector panel. No prose, just the spec.")
-
-def seed_two_images(client, front, back):
-    """Gộp front+back vào 1 request (tránh ARK serialize 2 request rời)."""
-    js, m = _vision(client, [front, back], TWO_IMG_PROMPT, need=("front", "back"))
-    return js, m
-
-AOP_PROMPT = (
-    "This is a photo of a person wearing a garment with a big printed graphic on the FRONT "
-    "(chest/torso). Return ONLY JSON: "
-    '{"graphic":{"box":[x0,y0,x1,y1],"desc":"..."},"fabric":"#rrggbb"}. '
-    "box = TIGHT bounding box of the printed front graphic, integers normalized 0-1000 (x from left, "
-    "y from top); exclude head, arms, legs and background. desc = concise flat spec of the graphic "
-    "(colors as words, shapes, motifs and their positions) so it can be redrawn cleanly. "
-    "fabric = hex colour of the base garment fabric (the plain cloth around the graphic).")
-
-def seed_aop(client, img):
-    w, h = Image.open(img).size
-    js, m = _vision(client, img, AOP_PROMPT, need=("graphic", "fabric"))
-    return js, (w, h), m
-
-OUTFIT_PROMPT = (
-    "This is a photo of a person wearing a full outfit (a top and a bottom). Describe the ENTIRE "
-    "outfit as a precise flat-technical spec so it can be redrawn as a fashion-flat. Return ONLY "
-    'JSON: {"top":{"desc":"..."},"bottom":{"desc":"..."}}. '
-    "top.desc = the upper garment: its type (hoodie/tee/jacket/etc.), base fabric colour, and EVERY "
-    "visible FRONT detail with colours and positions — chest graphics/panels, buttons, badges, "
-    "pockets, zipper, hood, collar, sleeve prints, cuffs. "
-    "bottom.desc = the lower garment: its type (pants/shorts/skirt), base colour, and every visible "
-    "front detail — knee patches, side stripes, pockets, waistband, hems. "
-    "Colours as words or hex. Be specific and positional; no prose outside the spec.")
-
-def seed_outfit(client, img):
-    w, h = Image.open(img).size
-    js, m = _vision(client, img, OUTFIT_PROMPT, need=("top", "bottom"))
-    return js, (w, h), m
-
-PANELS_PROMPT = (
-    "This photo shows a person in an outfit. Describe the FULL print of each cut-and-sew panel so each "
-    "can be printed edge-to-edge (full bleed). Return ONLY JSON: "
-    '{"front_top":"...","sleeve":"...","pants":"..."}. '
-    "front_top = ONLY the TORSO/BODY front panel of the upper garment (shoulders to hem), EXCLUDING "
-    "sleeves, hood and collar — describe the print covering just that torso panel: base colour + every "
-    "graphic/detail/colour and its position. "
-    "sleeve = ONE sleeve's print only (base colour, cuff, any badge/stripe), excluding the body. "
-    "pants = the front of the lower garment (legs/torso of the pants): base colour + every detail "
-    "(knee patches, stripes, pockets). Be specific and positional; colours as words or hex. If a part is "
-    "not visible, still give its base colour.")
-
-# key -> (nhãn tên file, label mô tả gửi model)
-PANEL_KEYS = [("ao_truoc", "front torso/body panel of the top (no sleeves, no hood)", "front_top"),
-              ("tay_ao",   "one sleeve",                                              "sleeve"),
-              ("quan",     "front of the pants",                                      "pants")]
-
-def seed_panels(client, img):
-    w, h = Image.open(img).size
-    js, m = _vision(client, img, PANELS_PROMPT, need=("front_top",))
-    return js, (w, h), m
-
+# --- vision: tách người (mode nhiều người) ---
 PEOPLE_PROMPT = (
-    "This photo shows several people standing in a row, each wearing a dress. Return ONLY JSON "
+    "This photo shows several people standing in a row, each wearing an outfit. Return ONLY JSON "
     '{"people":[[x0,y0,x1,y1],...]} ordered LEFT TO RIGHT, one TIGHT bounding box per person '
-    "covering that person's full dress (shoulders to hem), integers normalized 0-1000 (x from left, "
+    "covering that person's full outfit (shoulders to hem), integers normalized 0-1000 (x from left, "
     "y from top). Exclude neighboring people from each box as much as possible.")
 
 def seed_people(client, img):
@@ -277,18 +183,66 @@ def seed_people(client, img):
     js, m = _vision(client, img, PEOPLE_PROMPT, need=("people",))
     return js["people"], (w, h), m
 
-TWOVIEW_PROMPT = (
-    "This ONE photo shows the SAME dress from TWO angles side by side: a FRONT view (chest graphic "
-    "faces the camera) and a BACK view (rear of the dress). Return ONLY JSON: "
-    '{"front":{"bodice":{"box":[..],"desc":".."},"skirt":{"box":[..],"desc":".."}},'
-    '"back":{"bodice":{"box":[..],"desc":".."},"skirt":{"box":[..],"desc":".."}}}. '
-    "box = integers normalized 0-1000 (x from left, y from top) of that part on that view. "
-    "Correctly decide which figure is FRONT vs BACK. desc = concise flat-technical spec of the printed "
-    "graphic on that part (colors, bands, motifs, positions) to redraw as a flat vector panel.")
+# --- vision: PIECES = phân loại đồ + tả print từng mảnh (trước + sau) ---
+_PIECES_SCHEMA = (
+    "Classify the outfit, then describe each cut-and-sew PANEL as a concise flat-technical PRINT spec "
+    "(base colour + every graphic/motif and its position; colours as words or hex; no prose). "
+    "Return ONLY JSON. If it is a DRESS (one-piece, torso + skirt): "
+    '{"type":"dress","bodice_front":"..","skirt_front":"..","bodice_back":"..","skirt_back":".."}. '
+    "If it is a TOP + BOTTOM (a separate upper garment + pants/shorts): "
+    '{"type":"top_bottom","top_front":"..","sleeve":"..","pants_front":"..","top_back":"..","pants_back":".."}. '
+    "top_front/top_back = the TORSO/BODY panel of the upper garment only (EXCLUDE sleeves, hood, collar). "
+    "sleeve = ONE sleeve's print (base colour, cuff, any stripe/badge). "
+    "pants_front/pants_back = the pants legs panel.")
+_PIECES_INTRO = {
+    "infer": ("This photo shows the FRONT of a person's outfit. " + _PIECES_SCHEMA +
+              " Only the front is visible: INFER each *_back panel from the front — keep the same base "
+              "colour, yokes and trims, but a plainer body; drop front-only graphics/badges/zips unless "
+              "they clearly wrap around to the back."),
+    "two": ("You are given TWO photos of the SAME outfit: the FIRST image is the FRONT, the SECOND is "
+            "the BACK. " + _PIECES_SCHEMA +
+            " Describe *_front panels from the first image and *_back panels from the second (real back)."),
+    "combined": ("This ONE photo shows the SAME outfit from TWO angles side by side: a FRONT view and a "
+                 "BACK view. Decide which is which. " + _PIECES_SCHEMA +
+                 " Describe *_front panels from the front view and *_back panels from the back view (real back)."),
+}
 
-def seed_two_views(client, img):
+def seed_pieces(client, imgs, source):
+    """imgs: 1 path (infer/combined) hoặc [front, back] (two). Trả JSON {type, panel descs}."""
+    js, _ = _vision(client, imgs, _PIECES_INTRO[source], need=("type",))
+    return js
+
+# mảnh áo+quần: (slug file, label gửi model, key JSON, mặt) — full-bleed
+_TB_SPECS = [
+    ("ao_truoc",   "front torso/body panel of the top (no sleeves, no hood)", "top_front",   "front"),
+    ("ao_sau",     "back torso/body panel of the top (no sleeves, no hood)",  "top_back",    "back"),
+    ("tay_ao",     "one sleeve",                                              "sleeve",      "front"),
+    ("quan_truoc", "front of the pants",                                      "pants_front", "front"),
+    ("quan_sau",   "back of the pants",                                       "pants_back",  "back"),
+]
+# mảnh váy: (slug file, shape prompt, ảnh shape-guide, key JSON, mặt) — cắt cong
+_DRESS_SPECS = [
+    ("than_truoc", SHAPE_BODICE, "shape_bodice.png", "bodice_front", "front"),
+    ("than_sau",   SHAPE_BODICE, "shape_bodice.png", "bodice_back",  "back"),
+    ("ta_truoc",   SHAPE_FAN,    "shape_fan.png",    "skirt_front",  "front"),
+    ("ta_sau",     SHAPE_FAN,    "shape_fan.png",    "skirt_back",   "back"),
+]
+
+# --- vision: ART = tả cả bộ (áo trên + quần dưới) ---
+OUTFIT_PROMPT = (
+    "This is a photo of a person wearing a full outfit. Describe the ENTIRE outfit as a precise "
+    'flat-technical spec so it can be redrawn as a fashion-flat. Return ONLY JSON: '
+    '{"top":{"desc":"..."},"bottom":{"desc":"..."}}. '
+    "top.desc = the upper garment (or the top half of a dress): type, base fabric colour, and EVERY "
+    "visible FRONT detail with colours and positions — chest graphics/panels, buttons, badges, pockets, "
+    "zipper, hood, collar, sleeve prints, cuffs. "
+    "bottom.desc = the lower garment (or skirt): type, base colour, and every visible front detail — "
+    "knee patches, side stripes, pockets, waistband, hems. "
+    "Colours as words or hex. Be specific and positional; no prose outside the spec.")
+
+def seed_outfit(client, img):
     w, h = Image.open(img).size
-    js, m = _vision(client, img, TWOVIEW_PROMPT, need=("front", "back"))
+    js, m = _vision(client, img, OUTFIT_PROMPT, need=("top", "bottom"))
     return js, (w, h), m
 
 def crop_norm(img, box, wh, out):
@@ -300,8 +254,7 @@ def crop_norm(img, box, wh, out):
     return (x0, y0, x1, y1)
 
 
-# ---------- 3. gen: chatgpt-imagegen (primary) -> OpenArt Seedream 4.5 (fallback) ----------
-# ưu tiên binary bundled trong ./bin, không có thì dùng trên PATH
+# ---------- 2. gen: chatgpt-imagegen (primary) -> OpenArt Seedream 4.5 (fallback) ----------
 def _bin(name):
     cands = [name + ".exe", name] if sys.platform == "win32" else [name]
     for c in cands:
@@ -313,8 +266,7 @@ CHATGPT_BIN = _bin("chatgpt-imagegen")
 OPENART_BIN = _bin("openart")
 
 def _launcher(path):
-    """File là script python (shebang) -> chạy qua interpreter (bắt buộc trên Windows,
-    vì Windows không exec trực tiếp script không có .exe)."""
+    """File là script python (shebang) -> chạy qua interpreter (bắt buộc trên Windows)."""
     try:
         with open(path, "rb") as f:
             first = f.readline(200)
@@ -337,9 +289,7 @@ def _win_native_ok(path):
         return True
 
 def _run(cmd, timeout):
-    # Ép child in UTF-8 + đọc UTF-8 -> tránh UnicodeError khi đường dẫn có dấu tiếng Việt
-    # (console Windows mặc định cp1252). Đây từng khiến chatgpt-imagegen gen xong nhưng
-    # crash lúc print(out_path) -> bị coi là lỗi -> fallback nhầm sang OpenArt.
+    # Ép child in UTF-8 + đọc UTF-8 -> tránh UnicodeError khi đường dẫn có dấu tiếng Việt.
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                        env=env, encoding="utf-8", errors="replace")
@@ -384,7 +334,7 @@ def gen_panel(prompt, refs, out):
     return r
 
 
-# ---------- 4. cutout ngưỡng + ghép ----------
+# ---------- 3. cutout theo ngưỡng nền (cho mảnh váy: cắt cong, nền trong suốt) ----------
 def cutout(path, T=12):
     rgb = cv2.imread(str(path))[:, :, ::-1].copy()
     im = rgb.astype(np.int16); h, w = im.shape[:2]
@@ -401,175 +351,79 @@ def cutout(path, T=12):
     rgba = np.dstack([rgb, al]); ys, xs = np.where(fg > 0)
     return Image.fromarray(rgba[ys.min():ys.max() + 1, xs.min():xs.max() + 1])
 
-def _fit(img, bw, bh):
-    r = min(bw / img.width, bh / img.height)
-    return img.resize((max(1, int(img.width * r)), max(1, int(img.height * r))), Image.LANCZOS)
 
-def _place(cv, img, box):
-    x0, y0, x1, y1 = box; im = _fit(img, x1 - x0, y1 - y0)
-    cv.alpha_composite(im, (x0 + (x1 - x0 - im.width) // 2, y0 + (y1 - y0 - im.height) // 2))
-
-def assemble(panels, out, scale=None):
-    s = scale or SCALE or 1.0
-    def S(v): return int(round(v * s))
-    def box(b): return tuple(S(x) for x in b)
-    W, H = S(2400), S(1900)
-    cv = Image.new("RGBA", (W, H), BG + (255,)); d = ImageDraw.Draw(cv)
-    for i in range(2):
-        y = 55 + i * 70
-        d.rectangle(box([70, y, 2400 - 70, y + 46]), fill=(255, 255, 255, 255),
-                    outline=(150, 150, 150, 255), width=max(1, S(2)))
-    _place(cv, cutout(panels["skirt_front"]), box((40, 200, 1200, 900)))
-    _place(cv, cutout(panels["skirt_back"]),  box((40, 960, 1200, 1660)))
-    _place(cv, cutout(panels["bodice_front"]), box((1280, 300, 2340, 830)))
-    _place(cv, cutout(panels["bodice_back"]),  box((1280, 980, 2340, 1510)))
-    cv.convert("RGB").save(out)
-    return out
-
-
-# ---------- orchestration ----------
-def _gen_assemble(work, bcf, bcb, scf, scb, dbf, dbb, dsf, dsb, out):
-    """4 crop + 4 mô tả -> gen 4 panel -> ghép."""
-    jobs = [
-        ("bodice_front", FLAT + SHAPE_BODICE + " " + dbf, [bcf, ASSETS/"shape_bodice.png"]),
-        ("bodice_back",  FLAT + SHAPE_BODICE + " " + dbb, [bcb, ASSETS/"shape_bodice.png"]),
-        ("skirt_front",  FLAT + SHAPE_FAN    + " " + dsf, [scf, ASSETS/"shape_fan.png"]),
-        ("skirt_back",   FLAT + SHAPE_FAN    + " " + dsb, [scb, ASSETS/"shape_fan.png"]),
-    ]
-    def _one(item):
-        i, (name, prompt, refs) = item
-        dst = work / f"panel_{name}.png"
-        log("gen", f"panel {i}/4: {name} (bắt đầu)")
-        gen_panel(prompt, refs, dst)
-        log("gen", f"panel {i}/4: {name} (xong)")
-        return name, dst
-    items = list(enumerate(jobs, 1))
-    panels = {}
-    if GEN_WORKERS > 1 and len(items) > 1:
-        # panel đầu chạy MỘT MÌNH -> nếu token codex hết hạn thì chỉ 1 tiến trình
-        # refresh (tránh đua xoay refresh_token). Xong rồi mới bung phần còn lại.
-        name, dst = _one(items[0]); panels[name] = dst
-        with ThreadPoolExecutor(max_workers=min(GEN_WORKERS, len(items) - 1)) as ex:
-            for name, dst in ex.map(_one, items[1:]):
-                panels[name] = dst
+# ---------- 4. workers từng người ----------
+def run_pieces_one(client, img, out, emit_sub="", back=None, combined=False):
+    """1 người/1 trang phục -> mỗi mảnh 1 file.
+      áo+quần: full-bleed chữ nhật. váy: cắt cong (cutout), nền trong suốt.
+      mặt sau: back (2 ảnh) / combined (1 ảnh 2 mặt) -> lưng thật; else tự suy từ trước.
+      tay phải = lật ngang tay trái."""
+    work = _workdir("pieces_", emit_sub)
+    if back:
+        source, vimgs = "two", [img, back]
+    elif combined:
+        source, vimgs = "combined", img
     else:
-        for it in items:
-            name, dst = _one(it); panels[name] = dst
-    log("assemble", "cắt nền (ngưỡng) + ghép template ...")
-    assemble(panels, out)
-    log("done", str(out))
-    return out
-
-
-def run(front, back, out, emit_sub=""):
-    log("start", f"1 váy | front={Path(front).name}" + (f" back={Path(back).name}" if back else " (tự suy mặt sau)"))
-    clients = _ark_clients()
-    client = clients[0]
-    work = _workdir("flat_", emit_sub)
-    log("setup", f"workdir {work}")
-
-    def process(img, side, cl=None):
-        log("crop", f"{side}: nhìn ảnh ...")
-        js, wh, m = seed_vision(cl or client, img)
-        log("crop", f"{side}: bodice {js['bodice']['box']} skirt {js['skirt']['box']}")
-        bc = work / f"crop_bodice_{side}.png"; sc = work / f"crop_skirt_{side}.png"
-        crop_norm(img, js["bodice"]["box"], wh, bc)
-        crop_norm(img, js["skirt"]["box"],  wh, sc)
-        return js, bc, sc
-
-    if back and len(clients) >= 2:  # ≥2 key -> nhìn front/back SONG SONG thật (mỗi key 1 ảnh)
-        log("crop", f"nhìn 2 ảnh song song trên {len(clients)} key ...")
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            ff = ex.submit(process, front, "front", clients[0])
-            fbk = ex.submit(process, back, "back", clients[1])
-            jf, bcf, scf = ff.result(); jb, bcb, scb = fbk.result()
-        bdesc_b, sdesc_b = jb["bodice"]["desc"], jb["skirt"]["desc"]
-    elif back:  # 1 key -> gộp front+back vào 1 request (ARK serialize theo key)
-        log("crop", "nhìn cả 2 ảnh (1 request) ...")
-        js, m = seed_two_images(client, front, back)
-        fb, bb = js["front"], js["back"]
-        wf = Image.open(front).size; wb = Image.open(back).size
-        log("crop", f"front bodice {fb['bodice']['box']} | back bodice {bb['bodice']['box']}")
-        bcf = work / "crop_bodice_front.png"; scf = work / "crop_skirt_front.png"
-        bcb = work / "crop_bodice_back.png";  scb = work / "crop_skirt_back.png"
-        crop_norm(front, fb["bodice"]["box"], wf, bcf); crop_norm(front, fb["skirt"]["box"], wf, scf)
-        crop_norm(back,  bb["bodice"]["box"], wb, bcb); crop_norm(back,  bb["skirt"]["box"], wb, scb)
-        jf = fb
-        bdesc_b, sdesc_b = bb["bodice"]["desc"], bb["skirt"]["desc"]
-    else:  # không có ảnh sau -> tái dùng crop trước, mô tả "plain back"
-        jf, bcf, scf = process(front, "front")
-        bcb, scb = bcf, scf
-        bdesc_b = jf["bodice"]["desc"] + " This is the BACK: keep the same yoke/trim but plain body, remove any front-only buttons/buckle/emblem."
-        sdesc_b = jf["skirt"]["desc"] + " Identical to the front."
-
-    return _gen_assemble(work, bcf, bcb, scf, scb,
-                         jf["bodice"]["desc"], bdesc_b, jf["skirt"]["desc"], sdesc_b, out)
-
-
-def run_twoviews(img, out):
-    """1 ảnh chứa CẢ view trước + sau của cùng 1 váy -> dùng lưng THẬT."""
-    client = _ark_client()
-    log("start", f"2-view (trước+sau trong 1 ảnh) | {Path(img).name}")
-    log("crop", "nhìn ảnh, tách 2 view ...")
-    js, wh, m = seed_two_views(client, img)
-    fb, bb = js["front"], js["back"]
-    log("crop", f"front bodice {fb['bodice']['box']} | back bodice {bb['bodice']['box']}")
-    work = _workdir("fb_")
-    bcf = work / "bodice_front.png"; scf = work / "skirt_front.png"
-    bcb = work / "bodice_back.png";  scb = work / "skirt_back.png"
-    crop_norm(img, fb["bodice"]["box"], wh, bcf); crop_norm(img, fb["skirt"]["box"], wh, scf)
-    crop_norm(img, bb["bodice"]["box"], wh, bcb); crop_norm(img, bb["skirt"]["box"], wh, scb)
-    return _gen_assemble(work, bcf, bcb, scf, scb,
-                         fb["bodice"]["desc"], bb["bodice"]["desc"],
-                         fb["skirt"]["desc"], bb["skirt"]["desc"], out)
-
-
-def run_multi(img, out):
-    """Ảnh nhóm nhiều người: detect từng người -> chạy full pipeline (1 ảnh) -> out_1..N."""
-    log("start", f"NHÓM nhiều người | {Path(img).name}")
-    client = _ark_client()
-    log("detect", "nhìn ảnh, tách từng người ...")
-    boxes, wh, m = seed_people(client, img)
-    log("detect", f"phát hiện {len(boxes)} người")
-    work = _workdir("multi_")
+        source, vimgs = "infer", img
+    log("crop", "nhìn ảnh: phân loại đồ + tả print từng mảnh ...")
+    js = seed_pieces(client, vimgs, source)
+    typ = (js.get("type") or "top_bottom").strip()
+    ref_front = work / "crop_front.png"; Image.open(img).save(ref_front)
+    if back:
+        ref_back = work / "crop_back.png"; Image.open(back).save(ref_back)
+    else:
+        ref_back = ref_front   # combined: ảnh chứa cả 2 mặt; infer: dùng ảnh trước làm style-ref
+    refs = {"front": ref_front, "back": ref_back}
+    log("crop", f"loại: {typ}")
     outs = []
-    for i, box in enumerate(boxes, 1):
-        person = work / f"person_{i}.png"
-        crop_norm(img, box, wh, person)
-        dst = out.with_name(f"{out.stem}_{i}{out.suffix}")
-        log("person", f"=== {i}/{len(boxes)} -> {dst.name} ===")
-        try:
-            run(str(person), None, dst, emit_sub=f"person_{i}")
+    if typ == "dress":
+        for slug, shape, guide, key, side in _DRESS_SPECS:
+            desc = js.get(key) or ""
+            if not desc:
+                continue
+            dst = out.with_name(f"{out.stem}_{slug}{out.suffix}")
+            tmp = work / f"gen_{slug}.png"
+            log("gen", f"gen mảnh váy {slug} (cắt cong) ...")
+            gen_panel(FLAT + shape + " " + desc, [refs[side], ASSETS / guide], tmp)
+            cutout(tmp).save(dst)               # cắt theo silhouette, nền trong suốt
             outs.append(dst)
-        except Exception as e:
-            log("person", f"  người {i} lỗi, bỏ qua: {str(e)[:140]}")
-    log("done", f"multi {len(outs)}/{len(boxes)}: " + ", ".join(o.name for o in outs))
-    return outs
+    else:  # top_bottom (mặc định)
+        for slug, label, key, side in _TB_SPECS:
+            desc = js.get(key) or ""
+            if not desc:
+                continue
+            dst = out.with_name(f"{out.stem}_{slug}{out.suffix}")
+            log("gen", f"gen mảnh {slug} (in tràn) ...")
+            gen_panel(PANEL_BLEED.format(label=label, base=_base_colour(desc), desc=desc),
+                      [refs[side]], dst)
+            outs.append(dst)
+            if slug == "tay_ao":                # tay phải = lật ngang tay trái
+                dst2 = out.with_name(f"{out.stem}_tay_ao_2{out.suffix}")
+                Image.open(dst).transpose(Image.FLIP_LEFT_RIGHT).save(dst2)
+                outs.append(dst2)
+                log("gen", "mảnh tay_ao_2 = lật ngang tay_ao")
+    log("done", f"{len(outs)} mảnh: " + ", ".join(o.name for o in outs))
+    return outs[0] if outs else out
 
-
-def _hex_ok(s):
-    return bool(re.fullmatch(r"#?[0-9a-fA-F]{6}", (s or "").strip()))
-
-def run_aop_one(client, img, out, emit_sub=""):
-    """1 người: vision (graphic mặt trước + màu vải) -> gen thẳng 1 tấm AOP."""
-    work = _workdir("aop_", emit_sub)
-    log("crop", "nhìn ảnh: graphic mặt trước + màu vải ...")
-    js, wh, _ = seed_aop(client, img)
-    g = js["graphic"]; fabric = (js.get("fabric") or "").strip()
-    if not _hex_ok(fabric):
-        fabric = "#808080"
-    if not fabric.startswith("#"):
-        fabric = "#" + fabric
-    log("crop", f"graphic {g['box']} | vải {fabric}")
-    crop = work / "crop_graphic.png"
-    crop_norm(img, g["box"], wh, crop)
-    log("gen", "gen tấm AOP mặt trước ...")
-    gen_panel(AOP_FLAT.format(fabric=fabric, desc=g["desc"]), [crop], out)
+def run_art_one(client, img, out, emit_sub="", **_):
+    """1 người: vision tả cả bộ -> gen 1 bản vẽ phẳng nguyên bộ, mặt trước."""
+    work = _workdir("art_", emit_sub)
+    log("crop", "nhìn ảnh: tả chi tiết cả bộ ...")
+    js, _, _ = seed_outfit(client, img)
+    top = js["top"].get("desc", "") if isinstance(js["top"], dict) else str(js["top"])
+    bot = js["bottom"].get("desc", "") if isinstance(js["bottom"], dict) else str(js["bottom"])
+    log("crop", f"trên: {top[:60]}… | dưới: {bot[:60]}…")
+    ref = work / "crop_outfit.png"
+    Image.open(img).save(ref)
+    log("gen", "gen bản vẽ phẳng nguyên bộ ...")
+    gen_panel(OUTFIT_FLAT.format(top=top, bottom=bot), [ref], out)
     log("done", str(out))
     return out
 
-def _run_perperson(img, out, worker, label, wprefix):
-    """Khung chung: tách từng người -> mỗi người chạy `worker` -> out_1..N (1 người: out).
+
+# ---------- 5. orchestration: tách từng người (song song đa key) ----------
+def _run_perperson(img, out, worker, label, wprefix, **wkw):
+    """Tách từng người -> mỗi người chạy `worker` -> out_1..N (1 người: out).
     Nhiều người + nhiều key -> chạy song song."""
     log("start", f"{label} | {Path(img).name}")
     clients = _ark_clients()
@@ -585,7 +439,8 @@ def _run_perperson(img, out, worker, label, wprefix):
         dst = out if single else out.with_name(f"{out.stem}_{i}{out.suffix}")
         log("person", f"=== {i}/{len(boxes)} -> {dst.name} ===")
         try:
-            return worker(clients[(i - 1) % len(clients)], str(person), dst, emit_sub=f"person_{i}")
+            return worker(clients[(i - 1) % len(clients)], str(person), dst,
+                          emit_sub=f"person_{i}", **wkw)
         except Exception as e:
             log("person", f"  người {i} lỗi, bỏ qua: {str(e)[:140]}")
             return None
@@ -599,58 +454,19 @@ def _run_perperson(img, out, worker, label, wprefix):
     log("done", f"{label} {len(outs)}/{len(boxes)}: " + ", ".join(o.name for o in outs))
     return outs
 
-def run_aop(img, out):
-    """AOP mặt trước: nền màu vải + graphic. Tách từng người -> out_1..N."""
-    return _run_perperson(img, out, run_aop_one, "AOP mặt trước", "aopset_")
+def run_pieces(front, out, back=None, combined=False):
+    """Tách mảnh. 1 ảnh (tự suy sau) -> tách từng người. --back/--combined -> 1 trang phục, lưng thật."""
+    if back or combined:
+        client = _ark_client()
+        tag = "+sau thật (2 ảnh)" if back else "2-view (1 ảnh)"
+        log("start", f"PIECES tách mảnh | {Path(front).name} | {tag}")
+        run_pieces_one(client, front, Path(out), back=back, combined=combined)
+        return [Path(out)]
+    return _run_perperson(front, Path(out), run_pieces_one, "PIECES tách mảnh", "piecesset_")
 
-
-def run_outfit_one(client, img, out, emit_sub=""):
-    """1 người: vision tả cả bộ (áo+quần) -> gen 1 bản vẽ phẳng cả bộ, mặt trước."""
-    work = _workdir("outfit_", emit_sub)
-    log("crop", "nhìn ảnh: tả chi tiết áo + quần ...")
-    js, _, _ = seed_outfit(client, img)
-    top = js["top"].get("desc", "") if isinstance(js["top"], dict) else str(js["top"])
-    bot = js["bottom"].get("desc", "") if isinstance(js["bottom"], dict) else str(js["bottom"])
-    log("crop", f"áo: {top[:60]}… | quần: {bot[:60]}…")
-    ref = work / "crop_outfit.png"
-    Image.open(img).save(ref)                       # cả ảnh người làm tham chiếu chi tiết
-    log("gen", "gen bản vẽ phẳng cả bộ ...")
-    gen_panel(OUTFIT_FLAT.format(top=top, bottom=bot), [ref], out)
-    log("done", str(out))
-    return out
-
-def run_pieces_one(client, img, out, emit_sub=""):
-    """1 người: mỗi mảnh (áo trước / tay / quần) là 1 ảnh IN TRÀN kín khung, không viền.
-    Tay phải = lật ngang tay trái. (Mặt sau áo: cần ảnh sau — chưa hỗ trợ ở luồng này.)"""
-    work = _workdir("pieces_", emit_sub)
-    log("crop", "nhìn ảnh: tả print từng mảnh (áo trước/tay/quần) ...")
-    js, _, _ = seed_panels(client, img)
-    ref = work / "crop_outfit.png"
-    Image.open(img).save(ref)
-    outs = []
-    for slug, label, jskey in PANEL_KEYS:
-        desc = js.get(jskey) or ""
-        if not desc:
-            continue
-        dst = out.with_name(f"{out.stem}_{slug}{out.suffix}")
-        log("gen", f"gen mảnh {slug} (in tràn) ...")
-        gen_panel(PANEL_BLEED.format(label=label, desc=desc), [ref], dst)
-        outs.append(dst)
-        if slug == "tay_ao":                       # tay phải = lật ngang tay trái
-            dst2 = out.with_name(f"{out.stem}_tay_ao_2{out.suffix}")
-            Image.open(dst).transpose(Image.FLIP_LEFT_RIGHT).save(dst2)
-            outs.append(dst2)
-            log("gen", "mảnh tay_ao_2 = lật ngang tay_ao")
-    log("done", f"{len(outs)} mảnh: " + ", ".join(o.name for o in outs))
-    return outs[0] if outs else out
-
-def run_outfit(img, out):
-    """1 bản vẽ phẳng cả bộ (áo+quần) mặt trước. Tách từng người -> out_1..N."""
-    return _run_perperson(img, out, run_outfit_one, "OUTFIT phẳng cả bộ", "outfitset_")
-
-def run_pieces(img, out):
-    """Dàn từng mảnh rập (thân/tay/mũ/túi/ống) tách rời. Tách từng người -> out_1..N."""
-    return _run_perperson(img, out, run_pieces_one, "PIECES tách mảnh", "piecesset_")
+def run_art(front, out):
+    """Art phẳng: 1 bản vẽ nguyên bộ mặt trước. Tách từng người."""
+    return _run_perperson(front, Path(out), run_art_one, "ART phẳng nguyên bộ", "artset_")
 
 
 def _selfcheck():
@@ -659,26 +475,33 @@ def _selfcheck():
     p = Path(tempfile.mktemp(suffix=".png")); im.save(p)
     assert crop_norm(p, [100, 200, 900, 400], (1000, 500), Path(tempfile.mktemp(suffix=".png"))) == (100, 100, 900, 200)
     assert crop_norm(p, [900, 0, 100, 999], (1000, 500), Path(tempfile.mktemp(suffix=".png"))) == (100, 0, 900, 499)  # sort x, scale y
+    # 3 nguồn suy mặt sau đều có prompt riêng, đều ép JSON có "type" + đủ mảnh 2 mặt
+    for src in ("infer", "two", "combined"):
+        pr = _PIECES_INTRO[src]
+        assert '"type"' in pr and "top_back" in pr and "bodice_back" in pr, src
+    # mỗi loại đồ có đủ mảnh 2 mặt
+    assert {s[0] for s in _TB_SPECS} == {"ao_truoc", "ao_sau", "tay_ao", "quan_truoc", "quan_sau"}
+    assert {s[0] for s in _DRESS_SPECS} == {"than_truoc", "than_sau", "ta_truoc", "ta_sau"}
+    # neo màu nền: parse 'base <màu>' để ép panel thưa không tô đen/void
+    assert _base_colour("base white; yoke yellow") == "white"
+    assert _base_colour("base mustard yellow #E6A817; x") == "mustard yellow #E6A817"
+    assert _base_colour("no base word") == "the panel's own solid fabric colour"
     print("selfcheck OK")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--front"); ap.add_argument("--back")
-    ap.add_argument("--multi", action="store_true",
-                    help="ảnh nhóm nhiều người: tự tách từng người -> out_1..N")
-    ap.add_argument("--twoviews", action="store_true",
-                    help="1 ảnh chứa cả view trước+sau của cùng 1 váy: dùng lưng thật")
-    ap.add_argument("--aop", action="store_true",
-                    help="in tràn mặt trước: nền màu vải + graphic (mọi trang phục); tách từng người")
-    ap.add_argument("--outfit", action="store_true",
-                    help="1 bản vẽ phẳng cả bộ (áo+quần) đủ chi tiết mặt trước; tách từng người")
+    ap.add_argument("--front")
+    ap.add_argument("--back", help="ảnh mặt sau riêng (pieces: dùng lưng thật)")
+    ap.add_argument("--combined", action="store_true",
+                    help="pieces: ảnh --front chứa CẢ mặt trước + sau (2-view)")
     ap.add_argument("--pieces", action="store_true",
-                    help="dàn từng mảnh rập (thân/tay/mũ/túi/ống) tách rời trên 1 sheet; tách từng người")
+                    help="tách từng mảnh (auto váy/áo-quần), full-bleed, tách người, tự suy mặt sau")
+    ap.add_argument("--art", action="store_true",
+                    help="1 bản vẽ phẳng nguyên bộ mặt trước; tách từng người")
     ap.add_argument("-o", "--out", default="flat_out.png")
     ap.add_argument("--log", help="file ghi log (mặc định: <out>.log cạnh output)")
-    ap.add_argument("--emit", help="ghi crop/panel/final vào thư mục này (cho UI web poll)")
-    ap.add_argument("--scale", type=float, default=1.0, help="phóng cỡ ghép (1/2/3)")
+    ap.add_argument("--emit", help="ghi crop/mảnh vào thư mục này (cho UI web poll)")
     ap.add_argument("--selfcheck", action="store_true")
     a = ap.parse_args()
     if a.selfcheck:
@@ -686,21 +509,12 @@ if __name__ == "__main__":
     elif a.front:
         if a.emit:
             globals()["EMIT"] = a.emit
-        globals()["SCALE"] = max(0.5, min(4.0, a.scale))
         out = Path(a.out)
         logpath = _open_log(a.log or out.with_suffix(".log"))
         log("start", f"log -> {logpath}")
-        if a.pieces:
-            run_pieces(a.front, out)
-        elif a.outfit:
-            run_outfit(a.front, out)
-        elif a.aop:
-            run_aop(a.front, out)
-        elif a.multi:
-            run_multi(a.front, out)
-        elif a.twoviews:
-            run_twoviews(a.front, out)
-        else:
-            run(a.front, a.back, out)
+        if a.art:
+            run_art(a.front, out)
+        else:                                   # mặc định: pieces
+            run_pieces(a.front, out, back=a.back, combined=a.combined)
     else:
-        ap.error("cần --front (và tùy chọn --back/--multi/--twoviews), hoặc --selfcheck")
+        ap.error("cần --front (+ --pieces hoặc --art), hoặc --selfcheck")
