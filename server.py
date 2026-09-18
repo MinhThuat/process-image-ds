@@ -138,6 +138,8 @@ async def run(request):
         cmd += ["--aop"]
     elif mode == "outfit":
         cmd += ["--outfit"]
+    elif mode == "pieces":
+        cmd += ["--pieces"]
     p = subprocess.Popen(cmd, cwd=str(ROOT))
     _procs[rid] = p
     return web.json_response({"run": rid})

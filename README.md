@@ -24,6 +24,7 @@ start.bat 9000       REM đổi cổng
 - **Bảng điều khiển (dưới):** chọn chế độ (1 ảnh / 2 ảnh / 2-view / nhóm / **In tràn**), thả ảnh, bấm **Tạo rập**, xem **Nhật ký**.
   - **In tràn (AOP):** cho mọi trang phục — xuất 1 tấm phẳng = nền màu vải + graphic mặt trước (không tách panel). Ảnh nhiều người → mỗi người 1 tấm.
   - **Cả bộ (outfit):** 1 bản vẽ kỹ thuật phẳng cả áo + quần, đủ chi tiết mặt trước (nút, túi, huy hiệu, miếng đầu gối…), nền xám, không người. Ảnh nhiều người → mỗi người 1 bản.
+  - **Tách mảnh (pieces):** dàn từng mảnh rập tách rời (thân trước, tay, mũ, túi, ống quần, bo…) trên 1 sheet xám — như tờ rập cắt-may. Mặt trước, mỗi người 1 sheet.
 - **Badge codex hết hạn:** hiện nút *Đăng nhập lại* (chạy `codex login`, hiện URL/mã) khi phát hiện codex lỗi auth.
 
 ## Pipeline (lõi)

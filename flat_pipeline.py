@@ -97,6 +97,15 @@ OUTFIT_FLAT = (
     "Redraw EVERY visible front detail faithfully in the right place and colour. "
     "TOP garment: {top}. BOTTOM garment: {bottom}.")
 
+# Mode PIECES: dàn từng MẢNH rập (thân/tay/mũ/túi/ống) tách rời trên 1 sheet xám.
+PIECES_FLAT = (
+    "A 2D FLAT technical cut-and-sew PATTERN-PIECE layout on a plain light grey background. "
+    "Draw the outfit DECONSTRUCTED into its separate FRONT pattern pieces. Each piece is a flat, "
+    "symmetric silhouette with SOLID FLAT COLOR fill — no fabric texture, no 3D, no shading, no "
+    "shadow, no person, no head, no hands, no feet. Arrange the pieces SEPARATELY with clear gaps, "
+    "neatly like a real sewing-pattern sheet, none overlapping. Redraw each piece faithfully with "
+    "its own front details in the right colours and positions. Pieces to draw:\n{pieces}")
+
 
 # ---------- 1. dola-seed vision: bbox + mô tả ----------
 def _ark_keys():
@@ -234,6 +243,20 @@ def seed_outfit(client, img):
     w, h = Image.open(img).size
     js, m = _vision(client, img, OUTFIT_PROMPT, need=("top", "bottom"))
     return js, (w, h), m
+
+PIECES_PROMPT = (
+    "This photo shows a person in a full outfit (top + bottom). List the FRONT cut-and-sew PATTERN "
+    "PIECES of the outfit that are visible, so they can be drawn as a flat sewing-pattern sheet. "
+    'Return ONLY JSON: {"pieces":[{"name":"...","desc":"..."}, ...]}. '
+    "name = short piece slug (e.g. front_body, sleeve, hood, pocket, pant_front_leg, waistband, cuff). "
+    "desc = flat spec of that ONE piece: its shape + every colour/graphic/detail ON that piece with "
+    "positions. Only pieces visible from the front; ONE entry per mirrored pair (one sleeve, one leg). "
+    "Order the top's pieces first, then the bottom's.")
+
+def seed_pieces(client, img):
+    w, h = Image.open(img).size
+    js, m = _vision(client, img, PIECES_PROMPT, need=("pieces",))
+    return js["pieces"], (w, h), m
 
 PEOPLE_PROMPT = (
     "This photo shows several people standing in a row, each wearing a dress. Return ONLY JSON "
@@ -537,14 +560,15 @@ def run_aop_one(client, img, out, emit_sub=""):
     log("done", str(out))
     return out
 
-def run_aop(img, out):
-    """AOP mặt trước cho mọi trang phục. Tách từng người -> mỗi người 1 tấm (out_1..N)."""
-    log("start", f"AOP mặt trước | {Path(img).name}")
+def _run_perperson(img, out, worker, label, wprefix):
+    """Khung chung: tách từng người -> mỗi người chạy `worker` -> out_1..N (1 người: out).
+    Nhiều người + nhiều key -> chạy song song."""
+    log("start", f"{label} | {Path(img).name}")
     clients = _ark_clients()
     log("detect", "nhìn ảnh, tách từng người ...")
     boxes, wh, _ = seed_people(clients[0], img)
     log("detect", f"phát hiện {len(boxes)} người")
-    work = _workdir("aopset_")
+    work = _workdir(wprefix)
     single = len(boxes) == 1
 
     def one(i, box):
@@ -553,7 +577,7 @@ def run_aop(img, out):
         dst = out if single else out.with_name(f"{out.stem}_{i}{out.suffix}")
         log("person", f"=== {i}/{len(boxes)} -> {dst.name} ===")
         try:
-            return run_aop_one(clients[(i - 1) % len(clients)], str(person), dst, emit_sub=f"person_{i}")
+            return worker(clients[(i - 1) % len(clients)], str(person), dst, emit_sub=f"person_{i}")
         except Exception as e:
             log("person", f"  người {i} lỗi, bỏ qua: {str(e)[:140]}")
             return None
@@ -564,8 +588,12 @@ def run_aop(img, out):
             outs = [d for d in ex.map(lambda t: one(*t), items) if d]
     else:
         outs = [d for d in (one(i, b) for i, b in items) if d]
-    log("done", f"AOP {len(outs)}/{len(boxes)}: " + ", ".join(o.name for o in outs))
+    log("done", f"{label} {len(outs)}/{len(boxes)}: " + ", ".join(o.name for o in outs))
     return outs
+
+def run_aop(img, out):
+    """AOP mặt trước: nền màu vải + graphic. Tách từng người -> out_1..N."""
+    return _run_perperson(img, out, run_aop_one, "AOP mặt trước", "aopset_")
 
 
 def run_outfit_one(client, img, out, emit_sub=""):
@@ -583,35 +611,31 @@ def run_outfit_one(client, img, out, emit_sub=""):
     log("done", str(out))
     return out
 
+def run_pieces_one(client, img, out, emit_sub=""):
+    """1 người: vision liệt kê từng mảnh -> gen 1 sheet dàn các mảnh rập tách rời."""
+    work = _workdir("pieces_", emit_sub)
+    log("crop", "nhìn ảnh: liệt kê từng mảnh rập ...")
+    pieces, _, _ = seed_pieces(client, img)
+    if not pieces:
+        raise RuntimeError("không nhận ra mảnh nào")
+    names = [str(p.get("name", "piece")) for p in pieces]
+    log("crop", f"{len(pieces)} mảnh: {', '.join(names)}")
+    lines = "\n".join(f"{i}) {p.get('name','piece').upper()}: {p.get('desc','')}"
+                      for i, p in enumerate(pieces, 1))
+    ref = work / "crop_outfit.png"
+    Image.open(img).save(ref)
+    log("gen", "gen sheet các mảnh rập ...")
+    gen_panel(PIECES_FLAT.format(pieces=lines), [ref], out)
+    log("done", str(out))
+    return out
+
 def run_outfit(img, out):
-    """Bản vẽ phẳng cả bộ (áo+quần), mặt trước. Tách từng người -> mỗi người 1 bản (out_1..N)."""
-    log("start", f"OUTFIT phẳng cả bộ | {Path(img).name}")
-    clients = _ark_clients()
-    log("detect", "nhìn ảnh, tách từng người ...")
-    boxes, wh, _ = seed_people(clients[0], img)
-    log("detect", f"phát hiện {len(boxes)} người")
-    work = _workdir("outfitset_")
-    single = len(boxes) == 1
+    """1 bản vẽ phẳng cả bộ (áo+quần) mặt trước. Tách từng người -> out_1..N."""
+    return _run_perperson(img, out, run_outfit_one, "OUTFIT phẳng cả bộ", "outfitset_")
 
-    def one(i, box):
-        person = work / f"person_{i}.png"
-        crop_norm(img, box, wh, person)
-        dst = out if single else out.with_name(f"{out.stem}_{i}{out.suffix}")
-        log("person", f"=== {i}/{len(boxes)} -> {dst.name} ===")
-        try:
-            return run_outfit_one(clients[(i - 1) % len(clients)], str(person), dst, emit_sub=f"person_{i}")
-        except Exception as e:
-            log("person", f"  người {i} lỗi, bỏ qua: {str(e)[:140]}")
-            return None
-
-    items = list(enumerate(boxes, 1))
-    if len(items) > 1 and len(clients) > 1:
-        with ThreadPoolExecutor(max_workers=min(len(clients), len(items))) as ex:
-            outs = [d for d in ex.map(lambda t: one(*t), items) if d]
-    else:
-        outs = [d for d in (one(i, b) for i, b in items) if d]
-    log("done", f"OUTFIT {len(outs)}/{len(boxes)}: " + ", ".join(o.name for o in outs))
-    return outs
+def run_pieces(img, out):
+    """Dàn từng mảnh rập (thân/tay/mũ/túi/ống) tách rời. Tách từng người -> out_1..N."""
+    return _run_perperson(img, out, run_pieces_one, "PIECES tách mảnh", "piecesset_")
 
 
 def _selfcheck():
@@ -634,6 +658,8 @@ if __name__ == "__main__":
                     help="in tràn mặt trước: nền màu vải + graphic (mọi trang phục); tách từng người")
     ap.add_argument("--outfit", action="store_true",
                     help="1 bản vẽ phẳng cả bộ (áo+quần) đủ chi tiết mặt trước; tách từng người")
+    ap.add_argument("--pieces", action="store_true",
+                    help="dàn từng mảnh rập (thân/tay/mũ/túi/ống) tách rời trên 1 sheet; tách từng người")
     ap.add_argument("-o", "--out", default="flat_out.png")
     ap.add_argument("--log", help="file ghi log (mặc định: <out>.log cạnh output)")
     ap.add_argument("--emit", help="ghi crop/panel/final vào thư mục này (cho UI web poll)")
@@ -649,7 +675,9 @@ if __name__ == "__main__":
         out = Path(a.out)
         logpath = _open_log(a.log or out.with_suffix(".log"))
         log("start", f"log -> {logpath}")
-        if a.outfit:
+        if a.pieces:
+            run_pieces(a.front, out)
+        elif a.outfit:
             run_outfit(a.front, out)
         elif a.aop:
             run_aop(a.front, out)
