@@ -30,7 +30,11 @@ MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp
 KNOWN_SLUGS = ["ao_truoc", "ao_sau", "quan_truoc", "quan_sau",
                "tay_truoc", "tay_sau", "tay_trai_truoc", "tay_trai_sau",
                "tay_phai_truoc", "tay_phai_sau", "than_truoc", "than_sau", "ta_truoc", "ta_sau"]
-CODEX_ERR = re.compile(r"codex.*(login|auth|expired|401|unauthor|token)", re.I)
+# codex hết hạn: log thật thường là 'token refresh failed: HTTP 401' / 'access token expired'
+# (không kèm chữ 'codex') -> bắt trực tiếp các dấu hiệu này, khỏi cần chữ 'codex' đứng trước.
+CODEX_ERR = re.compile(
+    r"token refresh failed|access token expired|http 401|\bunauthor|requires newer codex"
+    r"|codex.*(login|auth|expired|401|token)", re.I)
 
 def _parse_piece(stem):
     """final_<slug> hoặc final_<person>_<slug> -> (person, slug); None nếu không phải mảnh."""

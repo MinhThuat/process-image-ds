@@ -275,6 +275,16 @@ def _flatten_white(path):
         bg.paste(im, mask=im.split()[-1])
         bg.save(path)
 
+def _slug_wanted(slug, want):
+    """Khớp slug với danh sách chọn (--only). Tay: chọn 'tay_truoc'/'tay_sau' (chung) khớp cả
+    biến thể trái/phải (tay_trai_truoc, tay_phai_sau, ...) — vì lúc chọn chưa biết 2 tay giống hay khác."""
+    if slug in want:
+        return True
+    if slug.startswith("tay"):
+        side = "truoc" if slug.endswith("truoc") else "sau"
+        return f"tay_{side}" in want
+    return False
+
 def _make_piece(spec, refs, work, out):
     """Gen 1 mảnh theo spec -> file <out.stem>_<slug><suffix>. Váy: cắt cong (cutout); áo/quần/tay: full-bleed."""
     dst = out.with_name(f"{out.stem}_{spec['slug']}{out.suffix}")
@@ -441,7 +451,7 @@ def run_pieces_one(client, img, out, emit_sub="", back=None, combined=False, onl
     plan = _pieces_plan(js)
     if only:
         want = set(only if isinstance(only, (list, tuple, set)) else str(only).split(","))
-        plan = [s for s in plan if s["slug"] in want]
+        plan = [s for s in plan if _slug_wanted(s["slug"], want)]
     outs = []
     for spec in plan:
         log("gen", f"gen mảnh {spec['slug']} ...")
@@ -540,6 +550,10 @@ def _selfcheck():
     q = Path(tempfile.mktemp(suffix=".png")); Image.new("RGBA", (4, 4), (10, 20, 30, 0)).save(q)
     _flatten_white(q)
     assert Image.open(q).convert("RGB").getpixel((0, 0)) == (255, 255, 255)
+    # --only: chọn tay chung khớp cả biến thể trái/phải; không lẫn sang áo/quần
+    assert _slug_wanted("tay_trai_truoc", {"tay_truoc"}) and _slug_wanted("tay_phai_sau", {"tay_sau"})
+    assert not _slug_wanted("tay_trai_sau", {"tay_truoc"})
+    assert _slug_wanted("ao_sau", {"ao_sau"}) and not _slug_wanted("ao_sau", {"tay_sau"})
     # neo màu nền: parse 'base <màu>' để ép panel thưa không tô đen/void
     assert _base_colour("base white; yoke yellow") == "white"
     assert _base_colour("base mustard yellow #E6A817; x") == "mustard yellow #E6A817"
