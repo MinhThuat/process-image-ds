@@ -55,6 +55,12 @@
   .sw{display:inline-block;width:16px;height:16px;border-radius:3px;border:1px solid var(--line);vertical-align:middle;margin-right:5px}
   #msg{min-height:18px;margin-top:8px}
   .hidden{display:none}
+  #busy{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:14px;background:rgba(6,12,10,.72);backdrop-filter:blur(1px)}
+  #busy .ring{width:52px;height:52px;border:5px solid var(--line);border-top-color:var(--pin);
+    border-radius:50%;animation:spin 1s linear infinite}
+  #busy .t{font-size:14px;letter-spacing:.03em;color:var(--chalk)}
+  @keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -117,10 +123,12 @@
 
 <div id="msg"></div>
 </main>
+<div id="busy" class="hidden"><div class="ring"></div><div class="t" id="busyT">Đang tải…</div></div>
 
 <script>
 const $ = s => document.querySelector(s);
 const msg = (t, warn) => { const m=$("#msg"); m.textContent=t; m.className=warn?"warn":"muted"; };
+const busy = (on, t) => { if(t) $("#busyT").textContent=t; $("#busy").classList.toggle("hidden", !on); };
 let LEARN = null;   // {psd, canvas, fields, preview}
 
 // ---------- 1. HỌC MẪU ----------
@@ -166,20 +174,22 @@ async function learn(files){
   if(!files || !files.length){ msg("Không thấy file .psd/font — chọn folder mẫu hoặc thả PSD + font.", true); return; }
   const fd = new FormData();
   for(const f of files) fd.append("f", f, f.name);
-  msg("Đang đọc PSD…");
-  const r = await fetch("/magnet/learn",{method:"POST",body:fd});
-  const j = await r.json();
-  if(j.error){ msg(j.error, true); return; }
-  LEARN = j;
-  $("#learnResult").classList.remove("hidden");
-  if(!$("#slug").value){
-    const base = (files[0].name||"").replace(/\.(psd|PSD)$/,"");
-    $("#slug").value = base;
-  }
-  renderFields();
-  $("#prev").onload = drawBoxes;
-  $("#prev").src = j.preview;
-  msg(`Dò được ${j.fields.length} field.`);
+  busy(true, "Đang tải & đọc PSD…"); msg("Đang đọc PSD…");
+  try{
+    const r = await fetch("/magnet/learn",{method:"POST",body:fd});
+    const j = await r.json();
+    if(j.error){ msg(j.error, true); return; }
+    LEARN = j;
+    $("#learnResult").classList.remove("hidden");
+    if(!$("#slug").value){
+      const base = (files[0].name||"").replace(/\.(psd|PSD)$/,"");
+      $("#slug").value = base;
+    }
+    renderFields();
+    $("#prev").onload = drawBoxes;
+    $("#prev").src = j.preview;
+    msg(`Dò được ${j.fields.length} field.`);
+  } finally { busy(false); }
 }
 
 function renderFields(){
@@ -269,13 +279,15 @@ $("#btnSave").onclick = async () => {
   if(fields.some(f=>!f.font_file)){ msg("Có field thiếu font — thả kèm file font rồi học lại.", true); return; }
   if(TEMPLATES.some(t=>t.slug===slug) &&
      !confirm(`Template "${slug}" đã tồn tại. Ghi đè lên bản cũ?`)){ msg("Đã huỷ lưu."); return; }
-  msg("Đang lưu…");
-  const r = await fetch("/magnet/save",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({psd:LEARN.psd, slug, fields})});
-  const j = await r.json();
-  if(j.error){ msg(j.error, true); return; }
-  msg(`Đã lưu template "${j.slug}". Dùng ở mục 2.`);
-  fillTemplates(j.templates, j.slug);
+  busy(true, "Đang lưu template…"); msg("Đang lưu…");
+  try{
+    const r = await fetch("/magnet/save",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({psd:LEARN.psd, slug, fields})});
+    const j = await r.json();
+    if(j.error){ msg(j.error, true); return; }
+    msg(`Đã lưu template "${j.slug}". Dùng ở mục 2.`);
+    fillTemplates(j.templates, j.slug);
+  } finally { busy(false); }
 };
 
 // ---------- 2. BATCH ----------
@@ -377,21 +389,22 @@ $("#btnRender").onclick = async () => {
   const rows = ROWS.filter(r=>curFields().some(k=>(r[k]||"").trim()));   // bỏ dòng trống
   if(!slug){ msg("Chọn template.", true); return; }
   if(!rows.length){ msg("Điền ít nhất 1 dòng.", true); return; }
-  msg(`Đang render ${rows.length} ảnh…`);
+  busy(true, `Đang render ${rows.length} ảnh…`); msg(`Đang render ${rows.length} ảnh…`);
   $("#btnRender").disabled=true;
-  const r = await fetch("/magnet/render",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({slug, rows})});
-  const j = await r.json();
-  $("#btnRender").disabled=false;
-  if(j.error){ msg(j.error, true); return; }
-  const g = $("#grid"); g.innerHTML="";
-  j.images.forEach(im=>{
-    const c=document.createElement("div"); c.className="cell";
-    c.innerHTML=`<a href="${im.full}" target="_blank"><img src="${im.thumb}"></a><div class="cap">${im.name}</div>`;
-    g.appendChild(c);
-  });
-  const ob=$("#btnOpen"); ob.dataset.dir=j.dir||""; ob.classList.toggle("hidden", !j.dir);
-  msg(`Xong ${j.images.length} ảnh. Ảnh nằm trong: ${j.dir}`);
+  try{
+    const r = await fetch("/magnet/render",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({slug, rows})});
+    const j = await r.json();
+    if(j.error){ msg(j.error, true); return; }
+    const g = $("#grid"); g.innerHTML="";
+    j.images.forEach(im=>{
+      const c=document.createElement("div"); c.className="cell";
+      c.innerHTML=`<a href="${im.full}" target="_blank"><img src="${im.thumb}"></a><div class="cap">${im.name}</div>`;
+      g.appendChild(c);
+    });
+    const ob=$("#btnOpen"); ob.dataset.dir=j.dir||""; ob.classList.toggle("hidden", !j.dir);
+    msg(`Xong ${j.images.length} ảnh. Ảnh nằm trong: ${j.dir}`);
+  } finally { $("#btnRender").disabled=false; busy(false); }
 };
 
 $("#btnOpen").onclick = async () => {
