@@ -57,6 +57,7 @@
   .hidden{display:none}
   #busy{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;
     justify-content:center;gap:14px;background:rgba(6,12,10,.72);backdrop-filter:blur(1px)}
+  #busy.hidden{display:none}   /* id > .hidden về specificity, phải override riêng */
   #busy .ring{width:52px;height:52px;border:5px solid var(--line);border-top-color:var(--pin);
     border-radius:50%;animation:spin 1s linear infinite}
   #busy .t{font-size:14px;letter-spacing:.03em;color:var(--chalk)}
