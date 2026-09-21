@@ -29,7 +29,7 @@ start.bat 9000       REM đổi cổng
 
 ## Magnet — đổi tên hàng loạt (trang `/magnet`)
 Bấm **🧲 Magnet** ở góc phải. Học 1 lần / loại, tái dùng mãi:
-1. **Học mẫu:** thả **PSD + font đi kèm** (nên thả cả folder mẫu). Tool tự dò các layer text → font/màu/vị trí. Bỏ tick field cố định (tiêu đề), giữ phần cần đổi (tên, tàu, năm). Đặt mã → **Lưu template**.
+1. **Học mẫu:** thả **PSD + font đi kèm** (nên thả cả folder mẫu). Tool tự dò các layer text → font/màu/vị trí. Bỏ tick field cố định (tiêu đề), giữ phần cần đổi (tên, tàu, năm). **Kéo box** trên preview để dời/mở rộng (box rộng hơn → tên dài đỡ bị co nhỏ). Đặt mã → **Lưu template**.
 2. **Batch:** chọn template → điền thẳng vào **bảng cột** hiện sẵn (mỗi dòng 1 đơn; dán nhiều dòng từ Excel vào bảng cũng được) → **Render** → **Tải zip**. Nút **✎ Đổi tên** để đổi tên template (giữ được tiếng Việt + dấu cách).
 
 Nhớ trong `flat_studio_data/magnet_templates/<slug>/` (base.png đã trống tên + font + template.json). PSD gốc không bị đụng. Chữ dài tự co vừa khung. Chỉ đổi field dạng **text**; chọn tàu/năm bằng layer ảnh ẩn-hiện chưa hỗ trợ.

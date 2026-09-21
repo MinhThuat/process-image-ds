@@ -41,8 +41,13 @@
   td.box input{width:60px}
   .prevwrap{position:relative;display:inline-block;max-width:100%;margin-top:12px;background:#fff;border-radius:6px}
   .prevwrap img{display:block;max-width:100%;height:auto;border-radius:6px}
-  .fbox{position:absolute;border:2px solid var(--thread);background:rgba(224,72,59,.12);pointer-events:none}
-  .fbox span{position:absolute;top:-16px;left:0;font-size:10px;background:var(--thread);color:#fff;padding:0 4px;border-radius:3px;white-space:nowrap}
+  .fbox{position:absolute;border:2px solid var(--thread);background:rgba(224,72,59,.12);cursor:move;touch-action:none}
+  .fbox span{position:absolute;top:-16px;left:0;font-size:10px;background:var(--thread);color:#fff;padding:0 4px;border-radius:3px;white-space:nowrap;pointer-events:none}
+  .fbox .h{position:absolute;width:14px;height:14px;background:var(--pin);border:2px solid #fff;border-radius:2px}
+  .fbox .h.br{right:-7px;bottom:-7px;cursor:nwse-resize}
+  .fbox .h.bl{left:-7px;bottom:-7px;cursor:nesw-resize}
+  .fbox .h.tr{right:-7px;top:-7px;cursor:nesw-resize}
+  .fbox .h.tl{left:-7px;top:-7px;cursor:nwse-resize}
   .grid{display:flex;flex-wrap:wrap;gap:12px;margin-top:12px}
   .cell{background:var(--paper);padding:6px;border-radius:6px;text-align:center}
   .cell img{display:block;max-width:180px;border-radius:3px;background:#fff}
@@ -81,6 +86,7 @@
     <div style="overflow:auto">
       <table id="ftable"></table>
     </div>
+    <p class="muted" style="margin:12px 0 0">Kéo <b>box</b> để dời, kéo <b>4 góc</b> để mở rộng — box rộng hơn thì tên dài đỡ bị co nhỏ.</p>
     <div class="prevwrap" id="prevwrap"><img id="prev"><div id="overlay"></div></div>
   </div>
 </section>
@@ -201,21 +207,53 @@ function renderFields(){
   t.querySelectorAll(".use").forEach(el=>el.onchange=drawBoxes);
 }
 
+function scale(){ const img=$("#prev"); return [img.clientWidth/LEARN.canvas[0], img.clientHeight/LEARN.canvas[1]]; }
+
 function drawBoxes(){
   const img = $("#prev"), ov = $("#overlay");
   ov.innerHTML = "";
   if(!img.naturalWidth) return;
-  const sx = img.clientWidth / LEARN.canvas[0], sy = img.clientHeight / LEARN.canvas[1];
+  const [sx,sy] = scale();
   $("#ftable").querySelectorAll(".use").forEach(u=>{
     if(!u.checked) return;
-    const f = LEARN.fields[u.dataset.i], [x0,y0,x1,y1]=f.box;
+    const i = u.dataset.i, f = LEARN.fields[i], [x0,y0,x1,y1]=f.box;
     const d = document.createElement("div"); d.className="fbox";
     d.style.left=x0*sx+"px"; d.style.top=y0*sy+"px";
     d.style.width=(x1-x0)*sx+"px"; d.style.height=(y1-y0)*sy+"px";
-    d.innerHTML=`<span>${f.key}</span>`; ov.appendChild(d);
+    d.innerHTML=`<span>${f.key}</span>`
+      + ["tl","tr","bl","br"].map(c=>`<div class="h ${c}" data-c="${c}"></div>`).join("");
+    d.addEventListener("mousedown", e=>startDrag(e, i, "move"));
+    d.querySelectorAll(".h").forEach(h=>h.addEventListener("mousedown", e=>startDrag(e, i, h.dataset.c)));
+    ov.appendChild(d);
   });
 }
 window.addEventListener("resize", drawBoxes);
+
+// kéo tay: di chuyển cả box hoặc kéo 4 góc để mở rộng/thu hẹp
+let DRAG = null;
+function startDrag(e, i, mode){
+  e.preventDefault(); e.stopPropagation();
+  const [sx,sy] = scale();
+  DRAG = {i:+i, mode, sx, sy, mx:e.clientX, my:e.clientY, box:[...LEARN.fields[i].box]};
+  window.addEventListener("mousemove", onDrag);
+  window.addEventListener("mouseup", endDrag);
+}
+function onDrag(e){
+  if(!DRAG) return;
+  const dx = (e.clientX-DRAG.mx)/DRAG.sx, dy = (e.clientY-DRAG.my)/DRAG.sy;   // delta theo px canvas
+  let [x0,y0,x1,y1] = DRAG.box, m = DRAG.mode;
+  if(m==="move"){ x0+=dx;x1+=dx;y0+=dy;y1+=dy; }
+  else{
+    if(m[0]==="t") y0=Math.min(y1-10, y0+dy); else y1=Math.max(y0+10, y1+dy);  // t=top, b=bottom
+    if(m[1]==="l") x0=Math.min(x1-10, x0+dx); else x1=Math.max(x0+10, x1+dx);  // l=left, r=right
+  }
+  LEARN.fields[DRAG.i].box = [Math.round(x0),Math.round(y0),Math.round(x1),Math.round(y1)];
+  syncInputs(DRAG.i); drawBoxes();
+}
+function endDrag(){ DRAG=null; window.removeEventListener("mousemove",onDrag); window.removeEventListener("mouseup",endDrag); }
+function syncInputs(i){
+  $("#ftable").querySelectorAll(`.b[data-i="${i}"]`).forEach(el=>el.value=LEARN.fields[i].box[+el.dataset.k]);
+}
 
 $("#btnSave").onclick = async () => {
   const slug = $("#slug").value.trim();
