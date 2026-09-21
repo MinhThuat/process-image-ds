@@ -90,15 +90,16 @@
   <h2><span class="n">2</span>Chạy đổi tên hàng loạt</h2>
   <div class="row">
     <label>Template: <select id="tplsel"></select></label>
-    <button id="btnCsv">Tải CSV mẫu</button>
+    <button id="btnRename">✎ Đổi tên</button>
     <button id="btnReload">↻</button>
   </div>
-  <p class="muted" style="margin:10px 0 4px">Dán bảng đơn (từ Excel hoặc CSV) — dòng đầu là tên cột:</p>
-  <textarea id="csv" rows="7" style="width:100%" placeholder="order,name1,name2&#10;#1001,Alex,Sam"></textarea>
+  <p class="muted" style="margin:10px 0 4px">Điền tên theo cột (dán nhiều dòng từ Excel vào bảng cũng được):</p>
+  <div style="overflow:auto"><table id="entry"></table></div>
   <div class="row" style="margin-top:10px">
+    <button id="btnAddRow">+ dòng</button>
+    <button id="btnClear">Xoá hết</button>
     <button id="btnRender" class="hot">Render tất cả</button>
     <a id="zip" class="hidden" download>⬇ Tải zip</a>
-    <span id="rcount" class="muted"></span>
   </div>
   <div id="grid" class="grid"></div>
 </section>
@@ -233,37 +234,83 @@ $("#btnSave").onclick = async () => {
 };
 
 // ---------- 2. BATCH ----------
+let TEMPLATES = [], ROWS = [];
+
 async function loadTemplates(sel){
   const j = await (await fetch("/magnet/templates")).json();
   fillTemplates(j.templates, sel);
 }
 function fillTemplates(list, sel){
+  TEMPLATES = list;
   const s = $("#tplsel");
   s.innerHTML = list.map(t=>`<option value="${t.slug}">${t.slug} (${t.fields.join(", ")})</option>`).join("");
   if(sel) s.value = sel;
+  buildEntry();
 }
-$("#btnReload").onclick = () => loadTemplates($("#tplsel").value);
-$("#btnCsv").onclick = () => {
-  const slug = $("#tplsel").value; if(slug) location.href="/magnet/csv?slug="+encodeURIComponent(slug);
-};
+function curFields(){
+  const t = TEMPLATES.find(t=>t.slug===$("#tplsel").value);
+  return t ? t.fields : [];
+}
+function cols(){ return ["order", ...curFields()]; }
 
-function parseTable(txt){
-  const lines = txt.trim().split(/\r?\n/).filter(l=>l.trim());
-  if(lines.length<2) return [];
-  const delim = lines[0].includes("\t") ? "\t" : ",";
-  const head = lines[0].split(delim).map(s=>s.trim());
-  return lines.slice(1).map(l=>{
-    const c = l.split(delim); const o={};
-    head.forEach((h,i)=>o[h]=(c[i]||"").trim());
-    return o;
-  });
+function buildEntry(){
+  if(!ROWS.length) ROWS = [{}, {}, {}];
+  renderEntry();
 }
+function renderEntry(){
+  const C = cols(), t = $("#entry");
+  t.innerHTML = "<tr>" + C.map(c=>`<th>${c}</th>`).join("") + "<th></th></tr>";
+  ROWS.forEach((row,i)=>{
+    const tr = document.createElement("tr");
+    tr.innerHTML = C.map(c=>`<td><input data-i="${i}" data-c="${c}" value="${(row[c]||"").replace(/"/g,'&quot;')}"></td>`).join("")
+      + `<td><button data-del="${i}" title="xoá dòng">✕</button></td>`;
+    t.appendChild(tr);
+  });
+  t.querySelectorAll("input").forEach(el=>el.oninput=e=>ROWS[e.target.dataset.i][e.target.dataset.c]=e.target.value);
+  t.querySelectorAll("[data-del]").forEach(b=>b.onclick=e=>{
+    ROWS.splice(+e.target.dataset.del,1); if(!ROWS.length) ROWS=[{}]; renderEntry(); });
+}
+
+// dán nhiều dòng từ Excel/CSV -> đổ thẳng vào bảng (map theo thứ tự cột)
+$("#entry").addEventListener("paste", e=>{
+  const txt = (e.clipboardData||window.clipboardData).getData("text");
+  if(!/[\t\n]/.test(txt)) return;                       // 1 ô -> để dán bình thường
+  e.preventDefault();
+  const C = cols();
+  const lines = txt.replace(/\r/g,"").split("\n").filter(l=>l.length);
+  const delim = lines.some(l=>l.includes("\t")) ? "\t" : ",";
+  const rows = [];
+  lines.forEach(l=>{
+    const cells = l.split(delim).map(s=>s.trim());
+    if(cells[0].toLowerCase()==="order") return;        // bỏ dòng tiêu đề nếu có
+    const o={}; C.forEach((c,i)=>o[c]=cells[i]||""); rows.push(o);
+  });
+  if(rows.length){ ROWS = rows; renderEntry(); msg(`Đã dán ${rows.length} dòng.`); }
+});
+
+$("#tplsel").onchange = renderEntry;
+$("#btnReload").onclick = () => loadTemplates($("#tplsel").value);
+$("#btnAddRow").onclick = () => { ROWS.push({}); renderEntry(); };
+$("#btnClear").onclick = () => { ROWS = [{}]; renderEntry(); };
+
+$("#btnRename").onclick = async () => {
+  const old = $("#tplsel").value;
+  if(!old){ msg("Chưa có template.", true); return; }
+  const nw = prompt("Tên mới cho template:", old);
+  if(!nw || nw===old) return;
+  const r = await fetch("/magnet/rename",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({old, new:nw})});
+  const j = await r.json();
+  if(j.error){ msg(j.error, true); return; }
+  fillTemplates(j.templates, j.slug);
+  msg(`Đã đổi tên -> "${j.slug}".`);
+};
 
 $("#btnRender").onclick = async () => {
   const slug = $("#tplsel").value;
-  const rows = parseTable($("#csv").value);
+  const rows = ROWS.filter(r=>curFields().some(k=>(r[k]||"").trim()));   // bỏ dòng trống
   if(!slug){ msg("Chọn template.", true); return; }
-  if(!rows.length){ msg("Dán bảng đơn (có dòng tiêu đề).", true); return; }
+  if(!rows.length){ msg("Điền ít nhất 1 dòng.", true); return; }
   msg(`Đang render ${rows.length} ảnh…`);
   $("#btnRender").disabled=true;
   const r = await fetch("/magnet/render",{method:"POST",headers:{"Content-Type":"application/json"},

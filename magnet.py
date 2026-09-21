@@ -164,7 +164,7 @@ def _reg(data_dir):
 def save_template(psd_path, slug, fields, data_dir):
     """Ghi registry: base.png + fonts + template.json. fields: list đã user xác nhận."""
     psd_path = Path(psd_path)
-    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", slug).strip("_") or "template"
+    slug = _slug(slug)
     tdir = _reg(data_dir) / slug
     (tdir / "fonts").mkdir(parents=True, exist_ok=True)
     base = _build_base(psd_path, [f["layer"] for f in fields])
@@ -184,6 +184,29 @@ def save_template(psd_path, slug, fields, data_dir):
     tpl = {"slug": slug, "canvas": list(PSDImage.open(str(psd_path)).size),
            "base": "base.png", "fields": saved}
     (tdir / "template.json").write_text(json.dumps(tpl, ensure_ascii=False, indent=2), encoding="utf-8")
+    return tpl
+
+
+def _slug(s):
+    # Giữ tiếng Việt + dấu cách; chỉ bỏ ký tự cấm trong tên folder (Windows/Linux).
+    return re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "", str(s)).strip().strip(".") or "template"
+
+
+def rename_template(old, new, data_dir):
+    reg = _reg(data_dir)
+    src = reg / old
+    new = _slug(new)
+    dst = reg / new
+    if not (src / "template.json").is_file():
+        raise ValueError("template không tồn tại")
+    if new == old:
+        return json.loads((src / "template.json").read_text(encoding="utf-8"))
+    if dst.exists():
+        raise ValueError("tên mới đã tồn tại")
+    src.rename(dst)
+    tpl = json.loads((dst / "template.json").read_text(encoding="utf-8"))
+    tpl["slug"] = new
+    (dst / "template.json").write_text(json.dumps(tpl, ensure_ascii=False, indent=2), encoding="utf-8")
     return tpl
 
 
@@ -248,9 +271,9 @@ def render_rows(slug, rows, data_dir, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     for i, row in enumerate(rows, 1):
-        name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(row.get("order") or i)).strip("_") or str(i)
+        safe = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", str(row.get("order") or "")).strip() or "don"
         img = render_one(tpl, tdir, row)
-        p = out_dir / f"{name}.png"
+        p = out_dir / f"{i:03d}_{safe}.png"             # prefix index -> không đè nhau
         img.save(p)
         paths.append(p)
     return paths
