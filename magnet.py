@@ -90,17 +90,22 @@ def _style(layer):
 
 
 def _calibrate(font_file: Path, text, box):
-    """size_px sao cho chữ GỐC vừa chiều cao box; top_frac = (đỉnh->baseline)/size."""
+    """size_px sao cho chữ GỐC vừa chiều cao box; top_frac = (đỉnh ink -> baseline)/size.
+
+    Đo bằng anchor 'ls' (gốc = baseline) để khớp với cách _draw_field vẽ (anchor '*s').
+    getbbox anchor 'ls' trả (l, t, r, b) với y so với baseline: t âm (trên baseline).
+    """
     x0, y0, x1, y1 = box
     box_h = max(1, y1 - y0)
+    ref = text or "Ag"
     g = 200
     try:
         f = ImageFont.truetype(str(font_file), g)
-        l, t, r, b = f.getbbox(text or "Ag")
+        l, t, r, b = f.getbbox(ref, anchor="ls")
         h = max(1, b - t)
         size = max(4, round(g * box_h / h))
         f2 = ImageFont.truetype(str(font_file), size)
-        top = -f2.getbbox(text or "Ag")[1]            # đỉnh glyph so với baseline (dương)
+        top = -f2.getbbox(ref, anchor="ls")[1]        # đỉnh ink phía trên baseline (dương)
         return size, top / size
     except Exception:
         return box_h, 0.8

@@ -110,6 +110,7 @@
     <button id="btnAddRow">+ dòng</button>
     <button id="btnClear">Xoá hết</button>
     <button id="btnRender" class="hot">Render tất cả</button>
+    <button id="btnOpen" class="hidden">📂 Mở thư mục ảnh</button>
     <a id="zip" class="hidden" download>⬇ Tải zip</a>
   </div>
   <div id="grid" class="grid"></div>
@@ -389,7 +390,14 @@ $("#btnRender").onclick = async () => {
     g.appendChild(c);
   });
   const z=$("#zip"); z.href=j.zip; z.classList.remove("hidden");
-  msg(`Xong ${j.images.length} ảnh.`);
+  const ob=$("#btnOpen"); ob.dataset.dir=j.dir||""; ob.classList.toggle("hidden", !j.dir);
+  msg(`Xong ${j.images.length} ảnh. Ảnh nằm trong: ${j.dir}`);
+};
+
+$("#btnOpen").onclick = async () => {
+  const d=$("#btnOpen").dataset.dir; if(!d) return;
+  const r=await fetch("/magnet/reveal?p="+encodeURIComponent(d));
+  const j=await r.json(); if(j.error) msg(j.error, true);
 };
 
 loadTemplates();

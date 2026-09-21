@@ -405,7 +405,25 @@ async def magnet_render(request):
         im = Image.open(p).convert("RGB"); im.thumbnail((420, 420)); im.save(th, quality=85)
         imgs.append({"name": p.stem, "thumb": _magnet_url(th), "full": _magnet_url(p)})
     zip_path = magnet.zip_paths(paths, outdir / f"{slug}_{rid}.zip")
-    return web.json_response({"run": rid, "images": imgs, "zip": _magnet_url(zip_path)})
+    return web.json_response({"run": rid, "images": imgs,
+                             "zip": _magnet_url(zip_path), "dir": str(outdir)})
+
+async def magnet_reveal(request):
+    """Mở thư mục kết quả render trong file manager (khỏi tải/giải nén zip)."""
+    p = Path(os.path.realpath(request.query.get("p", "")))
+    if not str(p).startswith(str(MAGNET_RUNS)) or not p.exists():
+        return web.json_response({"error": "not found"}, status=404)
+    d = p if p.is_dir() else p.parent
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(d))                               # noqa: Windows Explorer
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(d)])
+        else:
+            subprocess.Popen(["xdg-open", str(d)])
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"ok": True})
 
 
 def main():
@@ -425,6 +443,7 @@ def main():
         web.get("/magnet/templates", _need_magnet(magnet_templates)), web.get("/magnet/template", _need_magnet(magnet_template)),
         web.post("/magnet/rename", _need_magnet(magnet_rename)), web.post("/magnet/delete", _need_magnet(magnet_delete)),
         web.get("/magnet/csv", _need_magnet(magnet_csv)), web.post("/magnet/render", _need_magnet(magnet_render)),
+        web.get("/magnet/reveal", _need_magnet(magnet_reveal)),
     ])
     print(f"Flat Studio chạy ở http://127.0.0.1:{a.port}")
     web.run_app(app, host="127.0.0.1", port=a.port, print=None)
