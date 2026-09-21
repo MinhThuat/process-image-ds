@@ -10,9 +10,10 @@ Luồng:
 Chỉ xử lý FIELD dạng TEXT (tên/tàu/năm là chữ). Tuỳ chọn dạng ẩn/hiện pixel
 (vd chọn tên tàu Disney bằng layer ảnh) chưa hỗ trợ ở v1.
 """
-import io, json, os, re, shutil, zipfile
+import io, json, math, os, re, shutil, zipfile
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from psd_tools import PSDImage
 
@@ -111,6 +112,32 @@ def _calibrate(font_file: Path, text, box):
         return box_h, 0.8
 
 
+def _detect_arc(layer):
+    """Độ cong (sagitta px, dương = cong lên/cười) của tên đặt trên cung. 0 = thẳng.
+
+    PSD không lưu type-on-path, nên tự dò: khớp parabol vào 'đáy mực' theo cột.
+    """
+    try:
+        a = np.asarray(layer.composite(force=True))
+        if a.ndim != 3 or a.shape[2] < 4:
+            return 0.0
+        m = a[..., 3] > 30
+        cols = np.where(m.any(0))[0]
+        if len(cols) < 20:
+            return 0.0
+        yb = np.array([np.where(m[:, cx])[0].max() for cx in cols], float)
+        A, B, C = np.polyfit(cols.astype(float), yb, 2)
+        w = float(cols.max() - cols.min())
+        sag = A * w * w / 4.0                          # baseline(mép) - baseline(đỉnh)
+        rows = np.where(m.any(1))[0]
+        h = float(rows.max() - rows.min()) if len(rows) else 1.0
+        # chỉ coi là cong khi độ cong đủ LỚN so với chiều cao chữ (né descender/swash
+        # của font script tạo parabol giả).
+        return float(round(sag)) if abs(sag) >= max(25, 0.25 * h) else 0.0
+    except Exception:
+        return 0.0
+
+
 def _type_layers(psd):
     """Các layer text ĐANG HIỆN (bỏ layer ẩn/biến thể không dùng)."""
     out = []
@@ -133,7 +160,9 @@ def analyze(psd_path):
         ff = _resolve_font(font_name, folder)
         box = list(l.bbox)
         txt = str(l.text)
-        size_px, top_frac = _calibrate(ff, txt, box) if ff else (max(1, box[3] - box[1]), 0.8)
+        arc = _detect_arc(l)                          # tên cong (banner) -> sagitta px
+        cal_box = [box[0], box[1], box[2], box[3] - int(abs(arc))]   # bỏ phần cong khi tính cỡ chữ
+        size_px, top_frac = _calibrate(ff, txt, cal_box) if ff else (max(1, cal_box[3] - cal_box[1]), 0.8)
         key = re.sub(r"[^a-z0-9]+", "_", str(l.name or "field").lower()).strip("_") or "field"
         while key in used:
             key += "_2"
@@ -144,6 +173,7 @@ def analyze(psd_path):
             "font_file": ff.name if ff else "",
             "color": list(color), "justify": just,
             "box": box, "size_px": size_px, "top_frac": round(top_frac, 4),
+            "arc": arc,
         })
     preview = psd.composite()
     return {"canvas": list(psd.size), "fields": fields, "preview": preview}
@@ -245,7 +275,7 @@ def csv_header(tpl):
 
 
 # ---------- render ----------
-def _draw_field(draw, f, tdir, value):
+def _draw_field(img, f, tdir, value):
     x0, y0, x1, y1 = f["box"]
     box_w = max(1, x1 - x0)
     fpath = tdir / "fonts" / f["font_file"]
@@ -255,6 +285,10 @@ def _draw_field(draw, f, tdir, value):
     if w > box_w:                                   # auto-shrink cho vừa bề ngang
         size = max(4, int(size * box_w / w))
         font = ImageFont.truetype(str(fpath), size)
+    if f.get("arc"):                                # tên đặt trên cung (banner)
+        _draw_arc(img, f, font, value, size)
+        return
+    draw = ImageDraw.Draw(img)
     just = f.get("justify", "center")
     ax = {"left": x0, "right": x1, "center": (x0 + x1) / 2}[just]
     anchor = {"left": "l", "right": "r", "center": "m"}[just] + "s"   # +baseline
@@ -262,14 +296,39 @@ def _draw_field(draw, f, tdir, value):
     draw.text((ax, baseline), value, font=font, fill=tuple(f["color"]), anchor=anchor)
 
 
+def _draw_arc(img, f, font, value, size):
+    """Vẽ từng chữ dọc theo parabol: đỉnh ở giữa box, hai mép thấp hơn |arc| px.
+    arc>0 = cong lên (cười); mỗi glyph xoay tiếp tuyến với cung."""
+    x0, y0, x1, y1 = f["box"]
+    W = max(1, x1 - x0); xc = (x0 + x1) / 2
+    arc = float(f["arc"])
+    color = tuple(f["color"])
+    just = f.get("justify", "center")
+    tot = font.getlength(value)
+    startx = {"left": x0, "right": x1 - tot, "center": xc - tot / 2}[just]
+    Yv = y0 + f["top_frac"] * size                  # baseline tại đỉnh cung
+    T = int(size * 3) + 8; half = T / 2
+    cur = startx
+    for ch in value:
+        cw = font.getlength(ch)
+        t = (cur - xc) / (W / 2)
+        py = Yv + arc * t * t                       # baseline y tại chữ này
+        slope = arc * 2 * (cur - xc) / ((W / 2) ** 2)
+        ang = math.degrees(math.atan(slope))
+        tile = Image.new("RGBA", (T, T), (0, 0, 0, 0))
+        ImageDraw.Draw(tile).text((half, half), ch, font=font, fill=color, anchor="ls")
+        tile = tile.rotate(-ang, resample=Image.BICUBIC, center=(half, half))
+        img.alpha_composite(tile, (int(round(cur - half)), int(round(py - half))))
+        cur += cw
+
+
 def render_one(tpl, tdir, values):
     """values: {key: text}. Trả ảnh RGBA đã vẽ tên mới."""
     img = Image.open(tdir / tpl["base"]).convert("RGBA")
-    draw = ImageDraw.Draw(img)
     for f in tpl["fields"]:
         v = values.get(f["key"], "")
         if v != "":
-            _draw_field(draw, f, tdir, str(v))
+            _draw_field(img, f, tdir, str(v))
     return img
 
 

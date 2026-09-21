@@ -34,6 +34,8 @@ Bấm **🧲 Magnet** ở góc phải. Học 1 lần / loại, tái dùng mãi:
 
 Nhớ trong `flat_studio_data/magnet_templates/<slug>/` (base.png đã trống tên + font + template.json). PSD gốc không bị đụng. Chữ dài tự co vừa khung. Chỉ đổi field dạng **text**; chọn tàu/năm bằng layer ảnh ẩn-hiện chưa hỗ trợ.
 
+**Tên cong (đặt trên cung, vd banner):** tự dò độ cong từ mẫu (cột **Cong** trong bảng field, dương = cong lên). Trên preview hiện đường cong + tay kéo (chấm vàng mép phải) để chỉnh cho khớp. Render vẽ từng chữ xoay theo cung.
+
 ## Pipeline (lõi)
 `dola-seed` (ARK vision) nhìn+crop → `chatgpt-imagegen` (codex) gen, lỗi → **fallback OpenArt Seedream 4.5** → cắt nền + ghép. Xem `flat_pipeline.py`.
 
