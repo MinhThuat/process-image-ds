@@ -138,6 +138,14 @@ def _detect_arc(layer):
         return 0.0
 
 
+def _dpi(psd):
+    """DPI thật của PSD (mặc định 72). Lưu dạng fixed-point 16.16."""
+    try:
+        return round(psd.image_resources.get(1005).data.horizontal / 65536)
+    except Exception:
+        return 72
+
+
 def _type_layers(psd):
     """Các layer text ĐANG HIỆN (bỏ layer ẩn/biến thể không dùng)."""
     out = []
@@ -202,8 +210,9 @@ def save_template(psd_path, slug, fields, data_dir):
     slug = _slug(slug)
     tdir = _reg(data_dir) / slug
     (tdir / "fonts").mkdir(parents=True, exist_ok=True)
+    dpi = _dpi(PSDImage.open(str(psd_path)))
     base = _build_base(psd_path, [f["layer"] for f in fields])
-    base.save(tdir / "base.png")
+    base.save(tdir / "base.png", dpi=(dpi, dpi))
     src_folder = psd_path.parent
     saved = []
     for f in fields:
@@ -217,7 +226,7 @@ def save_template(psd_path, slug, fields, data_dir):
             fn = src.name
         saved.append({**f, "font_file": fn})
     tpl = {"slug": slug, "canvas": list(PSDImage.open(str(psd_path)).size),
-           "base": "base.png", "fields": saved}
+           "dpi": dpi, "base": "base.png", "fields": saved}
     (tdir / "template.json").write_text(json.dumps(tpl, ensure_ascii=False, indent=2), encoding="utf-8")
     return tpl
 
@@ -340,12 +349,13 @@ def render_rows(slug, rows, data_dir, out_dir):
     tdir = _reg(data_dir) / slug
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    dpi = tpl.get("dpi", 72)
     paths = []
     for i, row in enumerate(rows, 1):
         safe = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", str(row.get("order") or "")).strip() or "don"
         img = render_one(tpl, tdir, row)
         p = out_dir / f"{i:03d}_{safe}.png"             # prefix index -> không đè nhau
-        img.save(p)
+        img.save(p, dpi=(dpi, dpi))                     # giữ DPI gốc của PSD (vd 300)
         paths.append(p)
     return paths
 
