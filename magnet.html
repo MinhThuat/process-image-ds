@@ -99,6 +99,10 @@
     <button id="btnRename">✎ Đổi tên</button>
     <button id="btnReload">↻</button>
   </div>
+  <div id="bprevwrap" class="hidden" style="margin-top:10px">
+    <img id="bprev" style="max-width:320px;border-radius:8px;background:#fff;display:block">
+    <span class="muted" style="font-size:11px">↑ nền mẫu (đã trống tên)</span>
+  </div>
   <p class="muted" style="margin:10px 0 4px">Điền tên theo cột (dán nhiều dòng từ Excel vào bảng cũng được):</p>
   <div style="overflow:auto"><table id="entry"></table></div>
   <div class="row" style="margin-top:10px">
@@ -283,7 +287,15 @@ function fillTemplates(list, sel){
   const s = $("#tplsel");
   s.innerHTML = list.map(t=>`<option value="${t.slug}">${t.slug} (${t.fields.join(", ")})</option>`).join("");
   if(sel) s.value = sel;
-  buildEntry();
+  buildEntry(); showBase();
+}
+async function showBase(){
+  const slug = $("#tplsel").value;
+  if(!slug){ $("#bprevwrap").classList.add("hidden"); return; }
+  try{
+    const j = await (await fetch("/magnet/template?slug="+encodeURIComponent(slug))).json();
+    if(j.base){ $("#bprev").src=j.base; $("#bprevwrap").classList.remove("hidden"); }
+  }catch(e){ $("#bprevwrap").classList.add("hidden"); }
 }
 function curFields(){
   const t = TEMPLATES.find(t=>t.slug===$("#tplsel").value);
@@ -326,7 +338,7 @@ $("#entry").addEventListener("paste", e=>{
   if(rows.length){ ROWS = rows; renderEntry(); msg(`Đã dán ${rows.length} dòng.`); }
 });
 
-$("#tplsel").onchange = renderEntry;
+$("#tplsel").onchange = () => { renderEntry(); showBase(); };
 $("#btnReload").onclick = () => loadTemplates($("#tplsel").value);
 $("#btnAddRow").onclick = () => { ROWS.push({}); renderEntry(); };
 $("#btnClear").onclick = () => { ROWS = [{}]; renderEntry(); };
