@@ -63,9 +63,14 @@
 <!-- ============ 1. HỌC MẪU ============ -->
 <section>
   <h2><span class="n">1</span>Học mẫu magnet (làm 1 lần / loại)</h2>
-  <div id="drop" class="drop">Thả <b>file PSD + font đi kèm</b> vào đây (hoặc bấm chọn).<br>
-    <span class="muted">Nên thả cả folder của mẫu để font khớp tự động.</span>
-    <input id="file" type="file" multiple accept=".psd,.ttf,.otf,.ttc,.PSD,.TTF,.OTF" class="hidden">
+  <div id="drop" class="drop">Thả <b>folder mẫu</b> (hoặc file PSD + font) vào đây.<br>
+    <span class="muted">Chỉ lấy .psd và font, tự bỏ qua ảnh/file khác.</span>
+    <div class="row" style="justify-content:center;margin-top:12px">
+      <button type="button" id="pickFolder">📁 Chọn folder</button>
+      <button type="button" id="pickFiles">📄 Chọn file</button>
+    </div>
+    <input id="inpFolder" type="file" webkitdirectory multiple class="hidden">
+    <input id="inpFiles" type="file" multiple accept=".psd,.ttf,.otf,.ttc,.PSD,.TTF,.OTF" class="hidden">
   </div>
   <div id="learnResult" class="hidden">
     <div class="row" style="margin-top:12px">
@@ -107,15 +112,46 @@ const msg = (t, warn) => { const m=$("#msg"); m.textContent=t; m.className=warn?
 let LEARN = null;   // {psd, canvas, fields, preview}
 
 // ---------- 1. HỌC MẪU ----------
-const drop = $("#drop"), fileInp = $("#file");
-drop.onclick = () => fileInp.click();
+const drop = $("#drop");
+const EXT = /\.(psd|ttf|otf|ttc)$/i;
+const keep = files => [...files].filter(f => EXT.test(f.name));   // chỉ PSD + font
+
+$("#pickFolder").onclick = () => $("#inpFolder").click();
+$("#pickFiles").onclick = () => $("#inpFiles").click();
+$("#inpFolder").onchange = e => learn(keep(e.target.files));
+$("#inpFiles").onchange = e => learn(keep(e.target.files));
+
 ["dragover","dragenter"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add("hi")}));
-["dragleave","drop"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove("hi")}));
-drop.addEventListener("drop", ev => learn(ev.dataTransfer.files));
-fileInp.onchange = () => learn(fileInp.files);
+drop.addEventListener("dragleave",ev=>{ev.preventDefault();drop.classList.remove("hi")});
+drop.addEventListener("drop", async ev => {
+  ev.preventDefault(); drop.classList.remove("hi");
+  const items = ev.dataTransfer.items;
+  let files;
+  if(items && items.length && items[0].webkitGetAsEntry){    // thả folder -> đệ quy lấy file thật
+    files = keep(await gatherEntries(items));
+  }else{
+    files = keep(ev.dataTransfer.files);
+  }
+  learn(files);
+});
+
+async function gatherEntries(items){
+  const roots = [...items].map(i=>i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  const out = [];
+  async function walk(entry){
+    if(entry.isFile){ out.push(await new Promise((res,rej)=>entry.file(res,rej))); }
+    else if(entry.isDirectory){
+      const rd = entry.createReader(); let batch;
+      do{ batch = await new Promise((res,rej)=>rd.readEntries(res,rej));
+          for(const e of batch) await walk(e); } while(batch.length);
+    }
+  }
+  for(const e of roots) await walk(e);
+  return out;
+}
 
 async function learn(files){
-  if(!files || !files.length) return;
+  if(!files || !files.length){ msg("Không thấy file .psd/font — chọn folder mẫu hoặc thả PSD + font.", true); return; }
   const fd = new FormData();
   for(const f of files) fd.append("f", f, f.name);
   msg("Đang đọc PSD…");

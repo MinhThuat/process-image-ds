@@ -301,18 +301,23 @@ async def magnet_img(request):
         return web.Response(status=404, text="not found")
     return web.FileResponse(p, headers={"Content-Type": MIME.get(p.suffix.lower(), "application/octet-stream")})
 
+MAGNET_UP_EXT = {".psd", ".ttf", ".otf", ".ttc"}
+
 async def magnet_learn(request):
     """Nhận PSD (+ font kèm) qua multipart -> phân tích field + preview."""
     reader = await request.multipart()
     dst = MAGNET_UP / time.strftime("%Y%m%d-%H%M%S")
     dst.mkdir(parents=True, exist_ok=True)
-    async for part in reader:
-        fn = os.path.basename(part.filename or "")
-        if not fn:
-            continue
-        with open(dst / fn, "wb") as f:
-            while chunk := await part.read_chunk():
-                f.write(chunk)
+    try:
+        async for part in reader:
+            fn = os.path.basename(part.filename or "")
+            if not fn or os.path.splitext(fn)[1].lower() not in MAGNET_UP_EXT:
+                continue                                 # bỏ thư mục/file lạ
+            with open(dst / fn, "wb") as f:
+                while chunk := await part.read_chunk():
+                    f.write(chunk)
+    except ConnectionResetError:
+        return web.json_response({"error": "upload bị ngắt (thả cả folder? chọn 'Chọn folder' hoặc thả file PSD + font)"}, status=400)
     psds = list(dst.glob("*.psd")) + list(dst.glob("*.PSD"))
     if not psds:
         return web.json_response({"error": "không thấy file .psd trong dữ liệu thả vào"}, status=400)
