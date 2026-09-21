@@ -111,7 +111,6 @@
     <button id="btnClear">Xoá hết</button>
     <button id="btnRender" class="hot">Render tất cả</button>
     <button id="btnOpen" class="hidden">📂 Mở thư mục ảnh</button>
-    <a id="zip" class="hidden" download>⬇ Tải zip</a>
   </div>
   <div id="grid" class="grid"></div>
 </section>
@@ -268,6 +267,8 @@ $("#btnSave").onclick = async () => {
     .map(u=>LEARN.fields[u.dataset.i]);
   if(!fields.length){ msg("Tick ít nhất 1 field.", true); return; }
   if(fields.some(f=>!f.font_file)){ msg("Có field thiếu font — thả kèm file font rồi học lại.", true); return; }
+  if(TEMPLATES.some(t=>t.slug===slug) &&
+     !confirm(`Template "${slug}" đã tồn tại. Ghi đè lên bản cũ?`)){ msg("Đã huỷ lưu."); return; }
   msg("Đang lưu…");
   const r = await fetch("/magnet/save",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({psd:LEARN.psd, slug, fields})});
@@ -296,7 +297,7 @@ async function showBase(){
   if(!slug){ $("#bprevwrap").classList.add("hidden"); return; }
   try{
     const j = await (await fetch("/magnet/template?slug="+encodeURIComponent(slug))).json();
-    if(j.base){ $("#bprev").src=j.base; $("#bprevwrap").classList.remove("hidden"); }
+    if(j.base){ $("#bprev").src=j.base+"&_="+Date.now(); $("#bprevwrap").classList.remove("hidden"); }  // né cache khi ghi đè
   }catch(e){ $("#bprevwrap").classList.add("hidden"); }
 }
 function curFields(){
@@ -389,7 +390,6 @@ $("#btnRender").onclick = async () => {
     c.innerHTML=`<a href="${im.full}" target="_blank"><img src="${im.thumb}"></a><div class="cap">${im.name}</div>`;
     g.appendChild(c);
   });
-  const z=$("#zip"); z.href=j.zip; z.classList.remove("hidden");
   const ob=$("#btnOpen"); ob.dataset.dir=j.dir||""; ob.classList.toggle("hidden", !j.dir);
   msg(`Xong ${j.images.length} ảnh. Ảnh nằm trong: ${j.dir}`);
 };

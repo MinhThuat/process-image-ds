@@ -404,9 +404,7 @@ async def magnet_render(request):
         th = p.with_suffix(".thumb.jpg")
         im = Image.open(p).convert("RGB"); im.thumbnail((420, 420)); im.save(th, quality=85)
         imgs.append({"name": p.stem, "thumb": _magnet_url(th), "full": _magnet_url(p)})
-    zip_path = magnet.zip_paths(paths, outdir / f"{slug}_{rid}.zip")
-    return web.json_response({"run": rid, "images": imgs,
-                             "zip": _magnet_url(zip_path), "dir": str(outdir)})
+    return web.json_response({"run": rid, "images": imgs, "dir": str(outdir)})
 
 async def magnet_reveal(request):
     """Mở thư mục kết quả render trong file manager (khỏi tải/giải nén zip)."""
