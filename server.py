@@ -12,6 +12,12 @@ import argparse, glob, json, os, re, subprocess, sys, time, urllib.request
 from pathlib import Path
 from aiohttp import web
 
+try:                                    # thiếu psd-tools -> chỉ tắt trang magnet, app cũ vẫn chạy
+    import magnet
+except Exception as _me:
+    magnet = None
+    _MAGNET_ERR = f"Magnet chưa dùng được (thiếu thư viện?): {_me}. Chạy lại setup.bat."
+
 ROOT = Path(__file__).resolve().parent
 HOME = Path(os.path.expanduser("~"))
 # Dữ liệu KHÔNG nằm trong studio: mặc định folder cạnh studio (cùng folder cha),
@@ -20,10 +26,16 @@ DATA = Path(os.getenv("STUDIO_DATA", ROOT.parent / "flat_studio_data")).expandus
 RUNS = DATA / "runs"
 UPLOADS = DATA / "uploads"
 RUNS.mkdir(parents=True, exist_ok=True); UPLOADS.mkdir(parents=True, exist_ok=True)
+# Magnet: upload PSD học mẫu + kết quả render (đều ngoài repo, như dữ liệu khác).
+MAGNET_UP = DATA / "magnet_uploads"
+MAGNET_RUNS = DATA / "magnet_runs"
+MAGNET_REG = DATA / "magnet_templates"
+for d in (MAGNET_UP, MAGNET_RUNS, MAGNET_REG):
+    d.mkdir(parents=True, exist_ok=True)
 PIPELINE = ROOT / "flat_pipeline.py"
 CODEX_AUTH = HOME / ".codex" / "auth.json"
 CODEX_LOGIN_LOG = DATA / "codex_login.log"
-SRC = [ROOT / "server.py", ROOT / "index.html", PIPELINE]
+SRC = [ROOT / "server.py", ROOT / "index.html", ROOT / "magnet.html", ROOT / "magnet.py", PIPELINE]
 
 MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 # slug mảnh (khớp flat_pipeline) -> parse tên file final_[<person>_]<slug>.png để gắn nút gen lại
@@ -265,11 +277,120 @@ async def restart(request):
     return web.json_response({"ok": True})
 
 
+# ===================== MAGNET (đổi tên hàng loạt) =====================
+from urllib.parse import quote
+
+def _magnet_url(p):
+    return "/magnet/img?p=" + quote(str(p))
+
+MAGNET_ROOTS = (MAGNET_UP, MAGNET_RUNS, MAGNET_REG)
+
+def _need_magnet(h):
+    async def w(request):
+        if magnet is None:
+            return web.json_response({"error": _MAGNET_ERR}, status=503)
+        return await h(request)
+    return w
+
+async def magnet_page(request):
+    return web.FileResponse(ROOT / "magnet.html")
+
+async def magnet_img(request):
+    p = Path(os.path.realpath(request.query.get("p", "")))
+    if not any(str(p).startswith(str(r)) for r in MAGNET_ROOTS) or not p.is_file():
+        return web.Response(status=404, text="not found")
+    return web.FileResponse(p, headers={"Content-Type": MIME.get(p.suffix.lower(), "application/octet-stream")})
+
+async def magnet_learn(request):
+    """Nhận PSD (+ font kèm) qua multipart -> phân tích field + preview."""
+    reader = await request.multipart()
+    dst = MAGNET_UP / time.strftime("%Y%m%d-%H%M%S")
+    dst.mkdir(parents=True, exist_ok=True)
+    async for part in reader:
+        fn = os.path.basename(part.filename or "")
+        if not fn:
+            continue
+        with open(dst / fn, "wb") as f:
+            while chunk := await part.read_chunk():
+                f.write(chunk)
+    psds = list(dst.glob("*.psd")) + list(dst.glob("*.PSD"))
+    if not psds:
+        return web.json_response({"error": "không thấy file .psd trong dữ liệu thả vào"}, status=400)
+    try:
+        a = magnet.analyze(psds[0])
+    except Exception as e:
+        return web.json_response({"error": f"đọc PSD lỗi: {e}"}, status=400)
+    prev = dst / "_preview.png"
+    a["preview"].convert("RGB").save(prev)          # PIL image -> file (UI hiển thị)
+    return web.json_response({
+        "psd": str(psds[0]), "canvas": a["canvas"], "fields": a["fields"],
+        "preview": _magnet_url(prev),
+    })
+
+async def magnet_save(request):
+    body = await request.json()
+    psd, slug, fields = body.get("psd"), body.get("slug", ""), body.get("fields") or []
+    if not psd or not Path(psd).is_file():
+        return web.json_response({"error": "thiếu PSD (học lại mẫu)"}, status=400)
+    if not fields:
+        return web.json_response({"error": "chưa chọn field nào"}, status=400)
+    try:
+        tpl = magnet.save_template(psd, slug, fields, DATA)
+    except Exception as e:
+        return web.json_response({"error": f"lưu template lỗi: {e}"}, status=400)
+    tdir = MAGNET_REG / tpl["slug"]
+    return web.json_response({"ok": True, "slug": tpl["slug"],
+                             "base": _magnet_url(tdir / "base.png"),
+                             "templates": magnet.list_templates(DATA)})
+
+async def magnet_templates(request):
+    return web.json_response({"templates": magnet.list_templates(DATA)})
+
+async def magnet_template(request):
+    slug = request.query.get("slug", "")
+    tpl = magnet.load_template(slug, DATA)
+    if not tpl:
+        return web.json_response({"error": "template không tồn tại"}, status=404)
+    return web.json_response({"tpl": tpl, "csv": magnet.csv_header(tpl),
+                             "base": _magnet_url(MAGNET_REG / slug / "base.png")})
+
+async def magnet_csv(request):
+    slug = request.query.get("slug", "")
+    tpl = magnet.load_template(slug, DATA)
+    if not tpl:
+        return web.Response(status=404, text="not found")
+    return web.Response(text=magnet.csv_header(tpl), headers={
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": f'attachment; filename="{slug}.csv"'})
+
+async def magnet_render(request):
+    body = await request.json()
+    slug, rows = body.get("slug", ""), body.get("rows") or []
+    if not magnet.load_template(slug, DATA):
+        return web.json_response({"error": "template không tồn tại"}, status=404)
+    if not rows:
+        return web.json_response({"error": "chưa có dòng đơn nào"}, status=400)
+    rid = time.strftime("%Y%m%d-%H%M%S")
+    outdir = MAGNET_RUNS / slug / rid
+    try:
+        paths = magnet.render_rows(slug, rows, DATA, outdir)
+    except Exception as e:
+        return web.json_response({"error": f"render lỗi: {e}"}, status=400)
+    imgs = []
+    from PIL import Image
+    for p in paths:                                 # thumb nhẹ cho lưới preview
+        th = p.with_suffix(".thumb.jpg")
+        im = Image.open(p).convert("RGB"); im.thumbnail((420, 420)); im.save(th, quality=85)
+        imgs.append({"name": p.stem, "thumb": _magnet_url(th), "full": _magnet_url(p)})
+    zip_path = magnet.zip_paths(paths, outdir / f"{slug}_{rid}.zip")
+    return web.json_response({"run": rid, "images": imgs, "zip": _magnet_url(zip_path)})
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8770)
     a = ap.parse_args()
-    app = web.Application(client_max_size=64 * 1024 * 1024)
+    app = web.Application(client_max_size=256 * 1024 * 1024)   # PSD magnet có thể >100MB
     app["boot_mtime"] = _src_mtime()
     app.add_routes([
         web.get("/", index), web.get("/media", media), web.get("/reveal", reveal),
@@ -277,6 +398,10 @@ def main():
         web.post("/run", run), web.post("/regen", regen), web.get("/state", state),
         web.get("/codex/status", codex_status), web.post("/codex/login", codex_login),
         web.get("/codex/login/log", codex_login_log), web.post("/restart", restart),
+        web.get("/magnet", magnet_page), web.get("/magnet/img", magnet_img),
+        web.post("/magnet/learn", _need_magnet(magnet_learn)), web.post("/magnet/save", _need_magnet(magnet_save)),
+        web.get("/magnet/templates", _need_magnet(magnet_templates)), web.get("/magnet/template", _need_magnet(magnet_template)),
+        web.get("/magnet/csv", _need_magnet(magnet_csv)), web.post("/magnet/render", _need_magnet(magnet_render)),
     ])
     print(f"Flat Studio chạy ở http://127.0.0.1:{a.port}")
     web.run_app(app, host="127.0.0.1", port=a.port, print=None)

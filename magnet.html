@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Magnet · đổi tên hàng loạt</title>
+<style>
+  :root{ --ink:#0e1917; --mat:#16302b; --line:#33534b; --chalk:#e4ece8; --muted:#93a8a0;
+    --thread:#e0483b; --pin:#e0a83f; --paper:#efe9dc; --r:10px; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ink);color:var(--chalk);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px}
+  a{color:var(--pin)}
+  header{display:flex;align-items:center;gap:14px;padding:10px 18px;
+    background:linear-gradient(var(--ink),#0c1614);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+  header h1{font-size:17px;margin:0}
+  header .sub{color:var(--muted);font-weight:400;letter-spacing:.2em;font-size:11px;margin-left:8px}
+  .sp{flex:1}
+  main{max-width:1100px;margin:0 auto;padding:18px}
+  section{background:#0c1614;border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:18px}
+  section h2{margin:0 0 12px;font-size:14px;letter-spacing:.04em}
+  section h2 .n{display:inline-flex;width:22px;height:22px;align-items:center;justify-content:center;
+    background:var(--pin);color:#1a1200;border-radius:50%;font-weight:700;margin-right:8px;font-size:12px}
+  button{background:transparent;border:1px solid var(--line);color:var(--chalk);
+    padding:7px 13px;border-radius:8px;cursor:pointer;font-size:13px}
+  button:hover{border-color:var(--pin);color:var(--pin)}
+  button.hot{border-color:var(--thread);color:#fff;background:#7a2b26}
+  button.hot:hover{background:#a2352d;color:#fff}
+  button:disabled{opacity:.5;cursor:default}
+  input,select,textarea{background:#0e1917;border:1px solid var(--line);color:var(--chalk);
+    border-radius:6px;padding:6px 8px;font-size:13px;font-family:inherit}
+  input[type=number]{width:76px}
+  .drop{border:2px dashed var(--line);border-radius:var(--r);padding:26px;text-align:center;color:var(--muted);cursor:pointer}
+  .drop.hi{border-color:var(--pin);color:var(--pin)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .muted{color:var(--muted)} .warn{color:var(--thread)}
+  table{border-collapse:collapse;width:100%;margin-top:12px;font-size:12.5px}
+  th,td{border:1px solid var(--line);padding:5px 7px;text-align:left;vertical-align:middle}
+  th{color:var(--muted);font-weight:600}
+  td input{width:100%}
+  td.box input{width:60px}
+  .prevwrap{position:relative;display:inline-block;max-width:100%;margin-top:12px;background:#fff;border-radius:6px}
+  .prevwrap img{display:block;max-width:100%;height:auto;border-radius:6px}
+  .fbox{position:absolute;border:2px solid var(--thread);background:rgba(224,72,59,.12);pointer-events:none}
+  .fbox span{position:absolute;top:-16px;left:0;font-size:10px;background:var(--thread);color:#fff;padding:0 4px;border-radius:3px;white-space:nowrap}
+  .grid{display:flex;flex-wrap:wrap;gap:12px;margin-top:12px}
+  .cell{background:var(--paper);padding:6px;border-radius:6px;text-align:center}
+  .cell img{display:block;max-width:180px;border-radius:3px;background:#fff}
+  .cell .cap{color:#1a1200;font-size:11px;margin-top:4px}
+  .sw{display:inline-block;width:16px;height:16px;border-radius:3px;border:1px solid var(--line);vertical-align:middle;margin-right:5px}
+  #msg{min-height:18px;margin-top:8px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>Magnet <span class="sub">ĐỔI TÊN HÀNG LOẠT</span></h1>
+  <div class="sp"></div>
+  <a href="/">← Flat Studio</a>
+</header>
+<main>
+
+<!-- ============ 1. HỌC MẪU ============ -->
+<section>
+  <h2><span class="n">1</span>Học mẫu magnet (làm 1 lần / loại)</h2>
+  <div id="drop" class="drop">Thả <b>file PSD + font đi kèm</b> vào đây (hoặc bấm chọn).<br>
+    <span class="muted">Nên thả cả folder của mẫu để font khớp tự động.</span>
+    <input id="file" type="file" multiple accept=".psd,.ttf,.otf,.ttc,.PSD,.TTF,.OTF" class="hidden">
+  </div>
+  <div id="learnResult" class="hidden">
+    <div class="row" style="margin-top:12px">
+      <label>Mã template (slug): <input id="slug" placeholder="vd: NTY240426B74"></label>
+      <button id="btnSave" class="hot">Lưu template</button>
+      <span class="muted">Bỏ tick field cố định (tiêu đề). Chỉ tick phần cần đổi.</span>
+    </div>
+    <div style="overflow:auto">
+      <table id="ftable"></table>
+    </div>
+    <div class="prevwrap" id="prevwrap"><img id="prev"><div id="overlay"></div></div>
+  </div>
+</section>
+
+<!-- ============ 2. CHẠY BATCH ============ -->
+<section>
+  <h2><span class="n">2</span>Chạy đổi tên hàng loạt</h2>
+  <div class="row">
+    <label>Template: <select id="tplsel"></select></label>
+    <button id="btnCsv">Tải CSV mẫu</button>
+    <button id="btnReload">↻</button>
+  </div>
+  <p class="muted" style="margin:10px 0 4px">Dán bảng đơn (từ Excel hoặc CSV) — dòng đầu là tên cột:</p>
+  <textarea id="csv" rows="7" style="width:100%" placeholder="order,name1,name2&#10;#1001,Alex,Sam"></textarea>
+  <div class="row" style="margin-top:10px">
+    <button id="btnRender" class="hot">Render tất cả</button>
+    <a id="zip" class="hidden" download>⬇ Tải zip</a>
+    <span id="rcount" class="muted"></span>
+  </div>
+  <div id="grid" class="grid"></div>
+</section>
+
+<div id="msg"></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const msg = (t, warn) => { const m=$("#msg"); m.textContent=t; m.className=warn?"warn":"muted"; };
+let LEARN = null;   // {psd, canvas, fields, preview}
+
+// ---------- 1. HỌC MẪU ----------
+const drop = $("#drop"), fileInp = $("#file");
+drop.onclick = () => fileInp.click();
+["dragover","dragenter"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add("hi")}));
+["dragleave","drop"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove("hi")}));
+drop.addEventListener("drop", ev => learn(ev.dataTransfer.files));
+fileInp.onchange = () => learn(fileInp.files);
+
+async function learn(files){
+  if(!files || !files.length) return;
+  const fd = new FormData();
+  for(const f of files) fd.append("f", f, f.name);
+  msg("Đang đọc PSD…");
+  const r = await fetch("/magnet/learn",{method:"POST",body:fd});
+  const j = await r.json();
+  if(j.error){ msg(j.error, true); return; }
+  LEARN = j;
+  $("#learnResult").classList.remove("hidden");
+  if(!$("#slug").value){
+    const base = (files[0].name||"").replace(/\.(psd|PSD)$/,"");
+    $("#slug").value = base;
+  }
+  renderFields();
+  $("#prev").onload = drawBoxes;
+  $("#prev").src = j.preview;
+  msg(`Dò được ${j.fields.length} field.`);
+}
+
+function renderFields(){
+  const t = $("#ftable");
+  t.innerHTML = "<tr><th>Dùng</th><th>Cột (key)</th><th>Layer</th><th>Mẫu</th><th>Font</th>"
+    + "<th>Màu</th><th>Canh</th><th>x0</th><th>y0</th><th>x1</th><th>y1</th></tr>";
+  LEARN.fields.forEach((f,i)=>{
+    const tr = document.createElement("tr");
+    const noFont = !f.font_file;
+    const [r,g,b] = f.color;
+    tr.innerHTML = `
+      <td style="text-align:center"><input type="checkbox" data-i="${i}" class="use" ${noFont?"":"checked"}></td>
+      <td><input class="key" data-i="${i}" value="${f.key}"></td>
+      <td class="muted">${f.layer}</td>
+      <td class="muted">${(f.text||"").slice(0,18)}</td>
+      <td class="${noFont?'warn':'muted'}">${f.font_file||"⚠ thiếu font"}</td>
+      <td><span class="sw" style="background:rgb(${r},${g},${b})"></span></td>
+      <td><select class="just" data-i="${i}">
+        ${["left","center","right"].map(o=>`<option ${o===f.justify?"selected":""}>${o}</option>`).join("")}</select></td>
+      <td class="box"><input type="number" class="b" data-i="${i}" data-k="0" value="${f.box[0]}"></td>
+      <td class="box"><input type="number" class="b" data-i="${i}" data-k="1" value="${f.box[1]}"></td>
+      <td class="box"><input type="number" class="b" data-i="${i}" data-k="2" value="${f.box[2]}"></td>
+      <td class="box"><input type="number" class="b" data-i="${i}" data-k="3" value="${f.box[3]}"></td>`;
+    t.appendChild(tr);
+  });
+  t.querySelectorAll(".key").forEach(el=>el.oninput=e=>LEARN.fields[e.target.dataset.i].key=e.target.value.trim());
+  t.querySelectorAll(".just").forEach(el=>el.onchange=e=>LEARN.fields[e.target.dataset.i].justify=e.target.value);
+  t.querySelectorAll(".b").forEach(el=>el.oninput=e=>{
+    LEARN.fields[e.target.dataset.i].box[e.target.dataset.k]=+e.target.value; drawBoxes(); });
+  t.querySelectorAll(".use").forEach(el=>el.onchange=drawBoxes);
+}
+
+function drawBoxes(){
+  const img = $("#prev"), ov = $("#overlay");
+  ov.innerHTML = "";
+  if(!img.naturalWidth) return;
+  const sx = img.clientWidth / LEARN.canvas[0], sy = img.clientHeight / LEARN.canvas[1];
+  $("#ftable").querySelectorAll(".use").forEach(u=>{
+    if(!u.checked) return;
+    const f = LEARN.fields[u.dataset.i], [x0,y0,x1,y1]=f.box;
+    const d = document.createElement("div"); d.className="fbox";
+    d.style.left=x0*sx+"px"; d.style.top=y0*sy+"px";
+    d.style.width=(x1-x0)*sx+"px"; d.style.height=(y1-y0)*sy+"px";
+    d.innerHTML=`<span>${f.key}</span>`; ov.appendChild(d);
+  });
+}
+window.addEventListener("resize", drawBoxes);
+
+$("#btnSave").onclick = async () => {
+  const slug = $("#slug").value.trim();
+  if(!slug){ msg("Nhập mã template.", true); return; }
+  const fields = [...$("#ftable").querySelectorAll(".use")].filter(u=>u.checked)
+    .map(u=>LEARN.fields[u.dataset.i]);
+  if(!fields.length){ msg("Tick ít nhất 1 field.", true); return; }
+  if(fields.some(f=>!f.font_file)){ msg("Có field thiếu font — thả kèm file font rồi học lại.", true); return; }
+  msg("Đang lưu…");
+  const r = await fetch("/magnet/save",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({psd:LEARN.psd, slug, fields})});
+  const j = await r.json();
+  if(j.error){ msg(j.error, true); return; }
+  msg(`Đã lưu template "${j.slug}". Dùng ở mục 2.`);
+  fillTemplates(j.templates, j.slug);
+};
+
+// ---------- 2. BATCH ----------
+async function loadTemplates(sel){
+  const j = await (await fetch("/magnet/templates")).json();
+  fillTemplates(j.templates, sel);
+}
+function fillTemplates(list, sel){
+  const s = $("#tplsel");
+  s.innerHTML = list.map(t=>`<option value="${t.slug}">${t.slug} (${t.fields.join(", ")})</option>`).join("");
+  if(sel) s.value = sel;
+}
+$("#btnReload").onclick = () => loadTemplates($("#tplsel").value);
+$("#btnCsv").onclick = () => {
+  const slug = $("#tplsel").value; if(slug) location.href="/magnet/csv?slug="+encodeURIComponent(slug);
+};
+
+function parseTable(txt){
+  const lines = txt.trim().split(/\r?\n/).filter(l=>l.trim());
+  if(lines.length<2) return [];
+  const delim = lines[0].includes("\t") ? "\t" : ",";
+  const head = lines[0].split(delim).map(s=>s.trim());
+  return lines.slice(1).map(l=>{
+    const c = l.split(delim); const o={};
+    head.forEach((h,i)=>o[h]=(c[i]||"").trim());
+    return o;
+  });
+}
+
+$("#btnRender").onclick = async () => {
+  const slug = $("#tplsel").value;
+  const rows = parseTable($("#csv").value);
+  if(!slug){ msg("Chọn template.", true); return; }
+  if(!rows.length){ msg("Dán bảng đơn (có dòng tiêu đề).", true); return; }
+  msg(`Đang render ${rows.length} ảnh…`);
+  $("#btnRender").disabled=true;
+  const r = await fetch("/magnet/render",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({slug, rows})});
+  const j = await r.json();
+  $("#btnRender").disabled=false;
+  if(j.error){ msg(j.error, true); return; }
+  const g = $("#grid"); g.innerHTML="";
+  j.images.forEach(im=>{
+    const c=document.createElement("div"); c.className="cell";
+    c.innerHTML=`<a href="${im.full}" target="_blank"><img src="${im.thumb}"></a><div class="cap">${im.name}</div>`;
+    g.appendChild(c);
+  });
+  const z=$("#zip"); z.href=j.zip; z.classList.remove("hidden");
+  msg(`Xong ${j.images.length} ảnh.`);
+};
+
+loadTemplates();
+</script>
+</body>
+</html>

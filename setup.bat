@@ -22,8 +22,8 @@ where bash >nul 2>&1 && (echo   da co bash) || call :getgit
 call "%~dp0_env.bat"
 
 echo == 4. pip: aiohttp + thu vien anh ==
-python -m pip install "aiohttp>=3.9" pillow numpy opencv-python-headless scipy "openai>=1.0" python-dotenv ^
- || python -m pip install --user "aiohttp>=3.9" pillow numpy opencv-python-headless scipy "openai>=1.0" python-dotenv
+python -m pip install "aiohttp>=3.9" pillow numpy opencv-python-headless scipy "openai>=1.0" python-dotenv psd-tools ^
+ || python -m pip install --user "aiohttp>=3.9" pillow numpy opencv-python-headless scipy "openai>=1.0" python-dotenv psd-tools
 
 echo == 5. codex (npm global) ==
 where codex >nul 2>&1 && echo   da co codex || call npm install -g @openai/codex

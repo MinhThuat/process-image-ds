@@ -27,6 +27,13 @@ start.bat 9000       REM đổi cổng
   - **Tách mảnh (pieces):** dàn từng mảnh rập tách rời (thân trước, tay, mũ, túi, ống quần, bo…) trên 1 sheet xám — như tờ rập cắt-may. Mặt trước, mỗi người 1 sheet.
 - **Badge codex hết hạn:** hiện nút *Đăng nhập lại* (chạy `codex login`, hiện URL/mã) khi phát hiện codex lỗi auth.
 
+## Magnet — đổi tên hàng loạt (trang `/magnet`)
+Bấm **🧲 Magnet** ở góc phải. Học 1 lần / loại, tái dùng mãi:
+1. **Học mẫu:** thả **PSD + font đi kèm** (nên thả cả folder mẫu). Tool tự dò các layer text → font/màu/vị trí. Bỏ tick field cố định (tiêu đề), giữ phần cần đổi (tên, tàu, năm). Đặt mã → **Lưu template**.
+2. **Batch:** chọn template → **Tải CSV mẫu** → điền đơn (mỗi dòng 1 đơn, cột = field) → dán vào → **Render** → **Tải zip**.
+
+Nhớ trong `flat_studio_data/magnet_templates/<slug>/` (base.png đã trống tên + font + template.json). PSD gốc không bị đụng. Chữ dài tự co vừa khung. Chỉ đổi field dạng **text**; chọn tàu/năm bằng layer ảnh ẩn-hiện chưa hỗ trợ.
+
 ## Pipeline (lõi)
 `dola-seed` (ARK vision) nhìn+crop → `chatgpt-imagegen` (codex) gen, lỗi → **fallback OpenArt Seedream 4.5** → cắt nền + ghép. Xem `flat_pipeline.py`.
 
