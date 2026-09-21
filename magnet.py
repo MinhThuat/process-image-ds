@@ -210,6 +210,13 @@ def rename_template(old, new, data_dir):
     return tpl
 
 
+def delete_template(slug, data_dir):
+    d = _reg(data_dir) / slug
+    if not (d / "template.json").is_file():
+        raise ValueError("template không tồn tại")
+    shutil.rmtree(d)
+
+
 def load_template(slug, data_dir):
     p = _reg(data_dir) / slug / "template.json"
     if not p.is_file():

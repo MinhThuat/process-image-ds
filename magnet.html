@@ -97,6 +97,7 @@
   <div class="row">
     <label>Template: <select id="tplsel"></select></label>
     <button id="btnRename">✎ Đổi tên</button>
+    <button id="btnDelete" class="hot">🗑 Xoá</button>
     <button id="btnReload">↻</button>
   </div>
   <div id="bprevwrap" class="hidden" style="margin-top:10px">
@@ -354,6 +355,19 @@ $("#btnRename").onclick = async () => {
   if(j.error){ msg(j.error, true); return; }
   fillTemplates(j.templates, j.slug);
   msg(`Đã đổi tên -> "${j.slug}".`);
+};
+
+$("#btnDelete").onclick = async () => {
+  const slug = $("#tplsel").value;
+  if(!slug){ msg("Chưa có template.", true); return; }
+  if(!confirm(`Xoá template "${slug}"? Không khôi phục được.`)) return;
+  const r = await fetch("/magnet/delete",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({slug})});
+  const j = await r.json();
+  if(j.error){ msg(j.error, true); return; }
+  ROWS = [];
+  fillTemplates(j.templates, "");
+  msg(`Đã xoá template "${slug}".`);
 };
 
 $("#btnRender").onclick = async () => {

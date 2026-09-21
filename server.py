@@ -360,6 +360,14 @@ async def magnet_rename(request):
         return web.json_response({"error": str(e)}, status=400)
     return web.json_response({"ok": True, "slug": tpl["slug"], "templates": magnet.list_templates(DATA)})
 
+async def magnet_delete(request):
+    body = await request.json()
+    try:
+        magnet.delete_template(body.get("slug", ""), DATA)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({"ok": True, "templates": magnet.list_templates(DATA)})
+
 async def magnet_template(request):
     slug = request.query.get("slug", "")
     tpl = magnet.load_template(slug, DATA)
@@ -415,7 +423,7 @@ def main():
         web.get("/magnet", magnet_page), web.get("/magnet/img", magnet_img),
         web.post("/magnet/learn", _need_magnet(magnet_learn)), web.post("/magnet/save", _need_magnet(magnet_save)),
         web.get("/magnet/templates", _need_magnet(magnet_templates)), web.get("/magnet/template", _need_magnet(magnet_template)),
-        web.post("/magnet/rename", _need_magnet(magnet_rename)),
+        web.post("/magnet/rename", _need_magnet(magnet_rename)), web.post("/magnet/delete", _need_magnet(magnet_delete)),
         web.get("/magnet/csv", _need_magnet(magnet_csv)), web.post("/magnet/render", _need_magnet(magnet_render)),
     ])
     print(f"Flat Studio chạy ở http://127.0.0.1:{a.port}")
