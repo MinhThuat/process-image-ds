@@ -69,14 +69,16 @@ def _resolve_font(psd_name, folder: Path):
 
 # ---------- đọc style layer text ----------
 def _style(layer):
-    """(font_name, size_pt, color_rgba, justify) từ engine_dict; giá trị mặc định nếu thiếu."""
-    font_name, size_pt, color, just = "", None, (0, 0, 0, 255), "center"
+    """(font_name, size_pt, color_rgba, justify, tracking) từ engine_dict; mặc định nếu thiếu.
+    tracking = giãn cách chữ theo PS (đơn vị 1/1000 em) — Pillow không tự áp nên phải đọc ra."""
+    font_name, size_pt, color, just, track = "", None, (0, 0, 0, 255), "center", 0.0
     try:
         ed = layer.engine_dict
         sd = ed["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
         fonts = layer.resource_dict["FontSet"]
         font_name = str(fonts[sd.get("Font", 0)]["Name"])
         size_pt = float(sd.get("FontSize", 0)) or None
+        track = float(sd.get("Tracking", 0) or 0)
         v = sd.get("FillColor", {}).get("Values")     # [A,R,G,B] 0..1
         if v and len(v) == 4:
             color = (round(v[1] * 255), round(v[2] * 255), round(v[3] * 255), round(v[0] * 255))
@@ -87,7 +89,7 @@ def _style(layer):
         just = JUSTIFY.get(int(j), "center")
     except Exception:
         pass
-    return font_name, size_pt, color, just
+    return font_name, size_pt, color, just, track
 
 
 def _calibrate(font_file: Path, text, box):
@@ -275,7 +277,7 @@ def analyze(psd_path):
     fields = []
     used = set()
     for l in _type_layers(psd):
-        font_name, _size_pt, color, just = _style(l)
+        font_name, _size_pt, color, just, track = _style(l)
         ff = _resolve_font(font_name, folder)
         box = list(l.bbox)
         txt = str(l.text)
@@ -292,7 +294,7 @@ def analyze(psd_path):
             "font_file": ff.name if ff else "",
             "color": list(color), "justify": just,
             "box": box, "size_px": size_px, "top_frac": round(top_frac, 4),
-            "arc": arc, "effects": _effects(l),
+            "arc": arc, "track": track, "effects": _effects(l),
         })
     preview = psd.composite()
     bg_name, bg_color = _bg_layer(psd)                    # nền màu đơn đổi được (nếu có)
@@ -426,16 +428,39 @@ def csv_header(tpl):
 
 
 # ---------- render ----------
+def _layout(font, value, track_px):
+    """[(x_offset, ch)] + tổng bề ngang, có cộng tracking giữa các chữ."""
+    xs, x = [], 0.0
+    for ch in value:
+        xs.append((x, ch)); x += font.getlength(ch) + track_px
+    return xs, max(0.0, x - track_px)               # bỏ tracking thừa sau ký tự cuối
+
+
+def _draw_tracked(draw, ax, baseline, value, font, fill, ha, track_px, sw=0, scol=None):
+    """Vẽ chuỗi có tracking (giãn cách chữ). track_px=0 -> vẽ 1 lệnh y như cũ (giữ kerning)."""
+    if not track_px:
+        draw.text((ax, baseline), value, font=font, fill=fill, anchor=ha + "s",
+                  stroke_width=sw, stroke_fill=scol)
+        return
+    xs, total = _layout(font, value, track_px)
+    start = {"l": ax, "m": ax - total / 2, "r": ax - total}[ha]
+    for xo, ch in xs:
+        draw.text((start + xo, baseline), ch, font=font, fill=fill, anchor="ls",
+                  stroke_width=sw, stroke_fill=scol)
+
+
 def _draw_field(img, f, tdir, value, override=None):
     x0, y0, x1, y1 = f["box"]
     box_w = max(1, x1 - x0)
     fpath = tdir / "fonts" / f["font_file"]
+    track = float(f.get("track") or 0)              # 1/1000 em (PS tracking)
     size = int(f["size_px"])
     font = ImageFont.truetype(str(fpath), size)
-    w = font.getlength(value)
-    if w > box_w:                                   # auto-shrink cho vừa bề ngang
+    _, w = _layout(font, value, track / 1000.0 * size)
+    if w > box_w:                                   # auto-shrink cho vừa bề ngang (kể cả tracking)
         size = max(4, int(size * box_w / w))
         font = ImageFont.truetype(str(fpath), size)
+    track_px = track / 1000.0 * size
     oc = _hex(override)                             # mã màu người dùng nhập (rỗng -> giữ màu PSD)
     if f.get("arc"):                                # tên đặt trên cung (banner)
         _draw_arc(img, f, font, value, size, oc)
@@ -457,7 +482,7 @@ def _draw_field(img, f, tdir, value, override=None):
         gc = _rgba(glow["color"])
         lay = Image.new("RGBA", img.size, (0, 0, 0, 0))
         sil = Image.new("L", img.size, 0)
-        ImageDraw.Draw(sil).text((ax, baseline), value, font=font, fill=255, anchor=anchor)
+        _draw_tracked(ImageDraw.Draw(sil), ax, baseline, value, font, 255, anchor[0], track_px)
         col = Image.new("RGBA", img.size, gc[:3] + (0,)); col.putalpha(sil)
         lay = col.filter(ImageFilter.GaussianBlur(max(1, glow["size"])))
         op = glow.get("opacity", 255)
@@ -470,8 +495,8 @@ def _draw_field(img, f, tdir, value, override=None):
     if sh:
         sc = _rgba(sh["color"])
         lay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        ImageDraw.Draw(lay).text((ax + sh["dx"], baseline + sh["dy"]), value, font=font,
-                                 fill=sc, anchor=anchor, stroke_width=sw, stroke_fill=sc)
+        _draw_tracked(ImageDraw.Draw(lay), ax + sh["dx"], baseline + sh["dy"], value, font,
+                      sc, anchor[0], track_px, sw, sc)
         if sh.get("blur"):
             lay = lay.filter(ImageFilter.GaussianBlur(sh["blur"]))
         op = sh.get("opacity", 255)
@@ -481,19 +506,19 @@ def _draw_field(img, f, tdir, value, override=None):
 
     # ---- fast-path: fill đặc, không effect fill đặc biệt -> vẽ 1 lệnh (như cũ, đã kiểm) ----
     if not (grad or bev or insh):
-        ImageDraw.Draw(img).text((ax, baseline), value, font=font, fill=fill, anchor=anchor,
-                                 stroke_width=sw, stroke_fill=scol)
+        _draw_tracked(ImageDraw.Draw(img), ax, baseline, value, font, fill, anchor[0],
+                      track_px, sw, scol)
         return
 
     # ---- fill nâng cao (gradient / bevel): cần alpha mask của chữ ----
     amask = Image.new("L", img.size, 0)
-    ImageDraw.Draw(amask).text((ax, baseline), value, font=font, fill=255, anchor=anchor)
+    _draw_tracked(ImageDraw.Draw(amask), ax, baseline, value, font, 255, anchor[0], track_px)
     bbox = amask.getbbox()
     # 3. stroke (viền) vẽ TRƯỚC fill để nằm dưới
     if sw:
         st = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        ImageDraw.Draw(st).text((ax, baseline), value, font=font, fill=(0, 0, 0, 0),
-                                anchor=anchor, stroke_width=sw, stroke_fill=scol)
+        _draw_tracked(ImageDraw.Draw(st), ax, baseline, value, font, (0, 0, 0, 0),
+                      anchor[0], track_px, sw, scol)
         img.alpha_composite(st)
     # 4. fill: bevel > gradient > solid
     if bev:
@@ -509,8 +534,8 @@ def _draw_field(img, f, tdir, value, override=None):
     if insh:
         ic = _rgba(insh["color"])
         shp = Image.new("L", img.size, 0)
-        ImageDraw.Draw(shp).text((ax + insh["dx"], baseline + insh["dy"]), value, font=font,
-                                 fill=255, anchor=anchor)
+        _draw_tracked(ImageDraw.Draw(shp), ax + insh["dx"], baseline + insh["dy"], value, font,
+                      255, anchor[0], track_px)
         if insh.get("blur"):
             shp = shp.filter(ImageFilter.GaussianBlur(insh["blur"]))
         # tối = phần trong chữ KHÔNG được silhouette-lệch phủ
@@ -570,13 +595,14 @@ def _draw_arc(img, f, font, value, size, override=None):
     arc = float(f["arc"])
     color = override or tuple(f["color"])
     just = f.get("justify", "center")
-    tot = font.getlength(value)
+    track_px = float(f.get("track") or 0) / 1000.0 * size    # giãn cách chữ (PS tracking)
+    _, tot = _layout(font, value, track_px)
     startx = {"left": x0, "right": x1 - tot, "center": xc - tot / 2}[just]
     Yv = y0 + f["top_frac"] * size                  # baseline tại đỉnh cung
     T = int(size * 3) + 8; half = T / 2
     cur = startx
     for ch in value:
-        cw = font.getlength(ch)
+        cw = font.getlength(ch) + track_px
         t = (cur - xc) / (W / 2)
         py = Yv + arc * t * t                       # baseline y tại chữ này
         slope = arc * 2 * (cur - xc) / ((W / 2) ** 2)
@@ -652,6 +678,10 @@ def _selfcheck_effects():
     assert _hex("#e01919") == (224, 25, 25, 255) and _hex("e01919") == (224, 25, 25, 255)
     assert _hex("#f00") == (255, 0, 0, 255)
     assert _hex("") is None and _hex(None) is None and _hex("xyz") is None and _hex("#12") is None
+    # tracking: giãn cách -> tổng bề ngang rộng hơn; track=0 giữ nguyên
+    fnt = ImageFont.load_default()
+    _, w0 = _layout(fnt, "ABC", 0); _, wT = _layout(fnt, "ABC", 10)
+    assert wT - w0 == 20, f"tracking phải cộng 10px x2 khoảng, được {wT-w0}"
     print(f"OK self-check effect: gradient biến thiên; bevel sáng-tối {lum.min()}..{lum.max()}; hex parse OK")
 
 
