@@ -59,6 +59,20 @@
   .sw{display:inline-block;width:16px;height:16px;border-radius:3px;border:1px solid var(--line);vertical-align:middle;margin-right:5px}
   #msg{min-height:18px;margin-top:8px}
   .hidden{display:none}
+  .guide{background:#0c1614;border:1px solid var(--line);border-radius:var(--r);margin-bottom:18px}
+  .guide>summary{cursor:pointer;padding:14px 16px;font-size:14px;font-weight:600;letter-spacing:.03em;list-style:none}
+  .guide>summary::-webkit-details-marker{display:none}
+  .guide>summary::before{content:"▸";color:var(--pin);margin-right:8px;display:inline-block;transition:transform .15s}
+  .guide[open]>summary::before{transform:rotate(90deg)}
+  .journey{padding:4px 18px 18px}
+  .jstep{position:relative;padding:0 0 20px 44px}
+  .jstep::before{content:"";position:absolute;left:15px;top:26px;bottom:-2px;width:2px;background:var(--line)}
+  .jstep:last-child::before{display:none}
+  .jnum{position:absolute;left:0;top:0;width:32px;height:32px;border-radius:50%;background:var(--pin);
+    color:#1a1200;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:14px}
+  .jstep h3{margin:4px 0 3px;font-size:13.5px}
+  .jstep p{margin:0;color:var(--muted);font-size:12.5px;line-height:1.55}
+  .jstep b{color:var(--chalk)}
   #busy{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;
     justify-content:center;gap:14px;background:rgba(6,12,10,.72);backdrop-filter:blur(1px)}
   #busy.hidden{display:none}   /* id > .hidden về specificity, phải override riêng */
@@ -75,6 +89,30 @@
   <a href="/">← Flat Studio</a>
 </header>
 <main>
+
+<details class="guide" open>
+  <summary>📖 Hướng dẫn — 6 bước từ PSD tới ảnh đổi tên hàng loạt</summary>
+  <div class="journey">
+    <div class="jstep"><div class="jnum">1</div>
+      <h3>Thả mẫu magnet</h3>
+      <p>Kéo <b>cả folder mẫu</b> (PSD + font đi kèm) vào ô, hoặc bấm <b>📁 Chọn folder</b> / <b>📄 Chọn file</b>. Tool tự đọc PSD, dò các layer chữ, font, màu, vị trí. <b>Làm 1 lần cho mỗi loại magnet.</b></p></div>
+    <div class="jstep"><div class="jnum">2</div>
+      <h3>Chọn phần cần đổi</h3>
+      <p>Bảng field hiện ra. <b>Bỏ tick</b> phần cố định (tiêu đề, tên tàu in sẵn); <b>giữ tick</b> phần khách đổi (tên, năm…). Cột <b>Cột (key)</b> là tên cột để nhập sau này.</p></div>
+    <div class="jstep"><div class="jnum">3</div>
+      <h3>Canh chỉnh trên preview</h3>
+      <p>Kéo <b>box</b> để dời, kéo <b>4 góc</b> để mở rộng (box rộng → tên dài đỡ bị co nhỏ). Chữ đặt trên cung (banner) tự dò độ cong — kéo <b>chấm vàng</b> để chỉnh cong cho khớp.</p></div>
+    <div class="jstep"><div class="jnum">4</div>
+      <h3>Lưu template</h3>
+      <p>Đặt <b>mã template</b> (vd <b>LTL132607A14</b>) rồi bấm <b>Lưu template</b>. Từ đây tái dùng mãi, không cần học lại. Trùng mã sẽ hỏi ghi đè.</p></div>
+    <div class="jstep"><div class="jnum">5</div>
+      <h3>Điền tên hàng loạt</h3>
+      <p>Xuống <b>mục 2</b>: chọn template (thấy ngay ảnh nền mẫu). Điền vào <b>bảng cột</b> — mỗi dòng 1 đơn. <b>Dán thẳng nhiều dòng từ Excel</b> vào bảng cũng được.</p></div>
+    <div class="jstep"><div class="jnum">6</div>
+      <h3>Render &amp; lấy ảnh</h3>
+      <p>Bấm <b>Render tất cả</b> → xem lưới preview → bấm <b>📂 Mở thư mục ảnh</b> để lấy file PNG (giữ đúng <b>DPI gốc</b> của PSD, vd 300). Không cần giải nén zip.</p></div>
+  </div>
+</details>
 
 <!-- ============ 1. HỌC MẪU ============ -->
 <section>
