@@ -94,6 +94,7 @@
   <h1>Magnet <span class="sub">ĐỔI TÊN HÀNG LOẠT</span></h1>
   <div class="sp"></div>
   <a href="/">← Flat Studio</a>
+  <button id="mrestart">↻ Restart</button>
 </header>
 <main>
 
@@ -552,6 +553,22 @@ $("#tour").addEventListener("click", e => { if(e.target.id==="tour") endTour(); 
 window.addEventListener("resize", reposTour);
 window.addEventListener("scroll", reposTour, true);
 try{ if(!localStorage.getItem("magnet_tour")) setTimeout(()=>showTour(0), 600); }catch(e){}
+
+// ---------- Restart code (giống trang Flat Studio) ----------
+$("#mrestart").onclick = async () => {
+  const b=$("#mrestart"); if(b._busy) return; b._busy=true; b.disabled=true;
+  b.textContent="đang khởi động lại — chờ vài giây rồi tự tải lại…";
+  try{ await fetch("/restart",{method:"POST"}); }catch(e){}
+  setTimeout(()=>location.reload(), 4000);
+};
+async function mHeartbeat(){                    // có code mới -> nút sáng đỏ
+  try{ const r=await (await fetch("/codex/status")).json();
+    const b=$("#mrestart"); if(b._busy) return;
+    b.textContent = r.src_changed ? "↻ Có code mới — Restart" : "↻ Restart";
+    b.classList.toggle("hot", !!r.src_changed);
+  }catch(e){}
+}
+setInterval(mHeartbeat, 8000); mHeartbeat();
 
 loadTemplates();
 </script>

@@ -135,6 +135,19 @@
 
   @media (max-width:900px){#deck{grid-template-columns:1fr}}
   @media (prefers-reduced-motion:reduce){.working .piece.pending{animation:none}}
+  /* ---- guided tour ---- */
+  #tour{position:fixed;inset:0;z-index:60;display:none} #tour.on{display:block}
+  #tourHole{position:fixed;border-radius:8px;border:2px solid var(--pin);pointer-events:none;
+    box-shadow:0 0 0 9999px rgba(4,10,8,.74);transition:top .2s,left .2s,width .2s,height .2s}
+  #tourTip{position:fixed;max-width:300px;background:#12211d;border:1px solid var(--pin);
+    border-radius:10px;padding:14px;box-shadow:0 10px 34px rgba(0,0,0,.55)}
+  #tourTip h4{margin:0 0 6px;font-size:14px;color:var(--pin)}
+  #tourTip p{margin:0 0 12px;font-size:12.5px;color:var(--chalk);line-height:1.55}
+  #tourTip b{color:#fff}
+  #tourTip .nav{display:flex;gap:8px;align-items:center}
+  #tourTip .nav .step{flex:1;color:var(--muted);font-size:11px}
+  #tourClose{position:absolute;top:8px;right:10px;border:0;background:transparent;color:var(--muted);
+    font-size:16px;padding:0;cursor:pointer;line-height:1}
 </style>
 </head>
 <body>
@@ -143,9 +156,20 @@
   <h1 class="disp">Flat Studio<span class="sub">ảnh váy → rập phẳng</span></h1>
   <div class="sp"></div>
   <a href="/magnet" class="ghost" style="text-decoration:none;background:var(--pin);color:#1a1200;border-color:var(--pin);font-weight:700">🧲 Magnet</a>
+  <button id="btnTour" class="ghost">▶ Hướng dẫn</button>
   <span id="cxchip" class="chip"><span class="dot"></span><span id="cxtxt">đang kiểm tra codex…</span></span>
   <button id="restart" class="ghost">↻ Restart</button>
 </header>
+<div id="tour">
+  <div id="tourHole"></div>
+  <div id="tourTip">
+    <button id="tourClose" title="đóng">✕</button>
+    <h4 id="tourH"></h4><p id="tourP"></p>
+    <div class="nav"><span class="step" id="tourStep"></span>
+      <button id="tourPrev" class="ghost">← Trước</button>
+      <button id="tourNext" class="ghost">Tiếp →</button></div>
+  </div>
+</div>
 
 <!-- CANVAS: cutting mat -->
 <div id="mat">
@@ -431,6 +455,50 @@ $("#restart").onclick=async()=>{
   try{ await api("/restart",{method:"POST"}); }catch(e){}
   setTimeout(()=>location.reload(), 4000);   // start.bat tự bật lại server
 };
+
+// ---------- Hướng dẫn có badge chỉ vào từng chỗ (guided tour) ----------
+const TOUR=[
+  {sel:"#seg", h:"1. Chọn chế độ", p:"Chọn kiểu rập: <b>Tách mảnh</b> (từng mảnh rời), <b>Art phẳng</b> (1 bản vẽ nguyên bộ)… tùy loại trang phục."},
+  {sel:"#cbwrap", h:"2. Tùy chọn", p:"Tick <b>2 mặt trong 1 ảnh</b>, <b>vẽ phẳng vector</b>, hoặc mở <b>Chỉ gen mảnh chọn</b> để giới hạn mảnh cần."},
+  {sel:"#dzf", h:"3. Thả ảnh", p:"<b>Kéo-thả</b>, <b>dán Ctrl+V</b>, hoặc bấm chọn ảnh mặt trước. Có ảnh <b>mặt sau</b> thì thả thêm ô bên cạnh để dùng lưng thật."},
+  {sel:"#go", h:"4. Tạo rập", p:"Bấm <b>✂ Tạo rập</b> để chạy pipeline: dola-seed tách → gen phẳng → ghép."},
+  {sel:"#mat", h:"5. Xem bàn cắt", p:"Theo dõi real-time: <b>mảnh cắt</b> → <b>panel gen</b> → <b>thành phẩm</b>. Bấm ảnh bất kỳ để mở thư mục chứa nó."},
+  {sel:"#log", h:"6. Nhật ký", p:"Xem tiến trình & lỗi từng bước ở đây. Xong là ảnh nằm trong <b>flat_studio_data/runs/</b>."},
+];
+let TI=0;
+const vis=el=>el&&el.getClientRects().length>0;
+function tgt(s){ const e=document.querySelector(s.sel); return vis(e)?e:null; }
+function showTour(i){
+  TI=(i+TOUR.length)%TOUR.length; const s=TOUR[TI], el=tgt(s), last=TI===TOUR.length-1;
+  const hole=$("#tourHole"), tip=$("#tourTip");
+  $("#tour").classList.add("on");
+  $("#tourH").innerHTML=s.h; $("#tourP").innerHTML=s.p;
+  $("#tourStep").textContent=`Bước ${TI+1}/${TOUR.length}`;
+  $("#tourNext").textContent=last?"Xong ✓":"Tiếp →";
+  $("#tourPrev").style.visibility=TI?"visible":"hidden";
+  if(el){ el.scrollIntoView({block:"center",behavior:"smooth"}); setTimeout(()=>placeTour(el,hole,tip),280); }
+  else{ hole.style.width="0"; hole.style.height="0"; tip.style.transform="translate(-50%,-50%)"; tip.style.left="50%"; tip.style.top="42%"; }
+}
+function placeTour(el,hole,tip){
+  const r=el.getBoundingClientRect(), pad=6;
+  hole.style.left=(r.left-pad)+"px"; hole.style.top=(r.top-pad)+"px";
+  hole.style.width=(r.width+pad*2)+"px"; hole.style.height=(r.height+pad*2)+"px";
+  tip.style.transform="none";
+  const tw=tip.offsetWidth, th=tip.offsetHeight, gap=14;
+  let top=r.bottom+gap; if(top+th>innerHeight-8) top=Math.max(8,r.top-gap-th);
+  const left=Math.min(Math.max(8,r.left), innerWidth-tw-8);
+  tip.style.left=left+"px"; tip.style.top=top+"px";
+}
+function reposTour(){ if($("#tour").classList.contains("on")){ const el=tgt(TOUR[TI]); if(el) placeTour(el,$("#tourHole"),$("#tourTip")); } }
+function endTour(){ $("#tour").classList.remove("on"); try{localStorage.setItem("flat_tour","1")}catch(e){} }
+$("#btnTour").onclick=()=>showTour(0);
+$("#tourNext").onclick=()=>TI===TOUR.length-1?endTour():showTour(TI+1);
+$("#tourPrev").onclick=()=>showTour(TI-1);
+$("#tourClose").onclick=endTour;
+$("#tour").addEventListener("click",e=>{ if(e.target.id==="tour") endTour(); });
+window.addEventListener("resize",reposTour);
+window.addEventListener("scroll",reposTour,true);
+try{ if(!localStorage.getItem("flat_tour")) setTimeout(()=>showTour(0),700); }catch(e){}
 </script>
 </body>
 </html>
