@@ -19,6 +19,14 @@ start.bat            REM mở http://127.0.0.1:8770
 start.bat 9000       REM đổi cổng
 ```
 
+## macOS
+Windows dùng `setup.bat`/`start.bat`; macOS dùng 2 file `.command` (double-click chạy):
+```
+./setup-mac.command   # 1 lần: brew cài Python/Node/Git + venv + thư viện + codex + OpenArt(Mac) login
+./start-mac.command   # chạy app (vòng lặp cho nút Restart), mặc định cổng 8770; ./start-mac.command 9000 để đổi
+```
+Lần đầu double-click báo "không mở được" → chuột phải → **Open** → **Open** (bỏ chặn Gatekeeper 1 lần). OpenArt bản Mac (arm64 + amd64) đã bundle sẵn trong `bin/`, `setup-mac` tự copy đúng loại máy. Lõi tool + Magnet chạy y hệt Windows; chỉ khác bộ khởi chạy.
+
 ## Giao diện
 - **Bàn cắt (trên):** hiện real-time — mảnh crop → 4 panel gen → thành phẩm ghép.
 - **Bảng điều khiển (dưới):** chọn chế độ (1 ảnh / 2 ảnh / 2-view / nhóm / **In tràn**), thả ảnh, bấm **Tạo rập**, xem **Nhật ký**.
