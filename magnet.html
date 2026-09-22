@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Magnet · đổi tên hàng loạt</title>
+<title>Custom · đổi tên hàng loạt</title>
 <style>
   :root{ --ink:#0e1917; --mat:#16302b; --line:#33534b; --chalk:#e4ece8; --muted:#93a8a0;
     --thread:#e0483b; --pin:#e0a83f; --paper:#efe9dc; --r:10px; }
@@ -57,6 +57,11 @@
   .cell img{display:block;max-width:180px;border-radius:3px;background:#fff}
   .cell .cap{color:#1a1200;font-size:11px;margin-top:4px}
   .sw{display:inline-block;width:16px;height:16px;border-radius:3px;border:1px solid var(--line);vertical-align:middle;margin-right:5px}
+  #entry input.nm{width:100%}
+  .cwrap{display:flex;gap:4px;align-items:center;margin-top:4px}
+  .cwrap .cw{width:24px;height:24px;padding:0;border:1px solid var(--line);border-radius:5px;background:none;cursor:pointer;flex:0 0 auto}
+  .cwrap .cx{width:74px;padding:4px 5px;font-size:11px}
+  .cwrap .cclr{padding:2px 6px;font-size:12px;line-height:1;flex:0 0 auto}
   #msg{min-height:18px;margin-top:8px}
   .hidden{display:none}
   .tourbar{display:flex;align-items:center;gap:10px;background:#0c1614;border:1px solid var(--line);
@@ -91,7 +96,7 @@
 </head>
 <body>
 <header>
-  <h1>Magnet <span class="sub">ĐỔI TÊN HÀNG LOẠT</span></h1>
+  <h1>Custom <span class="sub">ĐỔI TÊN HÀNG LOẠT</span></h1>
   <div class="sp"></div>
   <a href="/">← Flat Studio</a>
   <button id="mrestart">↻ Restart</button>
@@ -105,7 +110,7 @@
 
 <!-- ============ 1. HỌC MẪU ============ -->
 <section id="s1">
-  <h2><span class="n">1</span>Học mẫu magnet (làm 1 lần / loại)</h2>
+  <h2><span class="n">1</span>Học mẫu Custom (làm 1 lần / loại)</h2>
   <div id="drop" class="drop">Thả <b>folder mẫu</b> (hoặc file PSD + font) vào đây.<br>
     <span class="muted">Chỉ lấy .psd và font, tự bỏ qua ảnh/file khác.</span>
     <div class="row" style="justify-content:center;margin-top:12px">
@@ -121,6 +126,7 @@
       <button id="btnSave" class="hot">Lưu template</button>
       <span class="muted">Bỏ tick field cố định (tiêu đề). Chỉ tick phần cần đổi.</span>
     </div>
+    <div id="bgnote" class="muted" style="margin-top:8px"></div>
     <div style="overflow:auto">
       <table id="ftable"></table>
     </div>
@@ -249,7 +255,7 @@ function renderFields(){
       <td style="text-align:center"><input type="checkbox" data-i="${i}" class="use" ${noFont?"":"checked"}></td>
       <td><input class="key" data-i="${i}" value="${f.key}"></td>
       <td class="muted">${f.layer}</td>
-      <td class="muted">${(f.text||"").slice(0,18)}</td>
+      <td class="muted">${(f.text||"").slice(0,18)}${(f.effects&&f.effects._unsupported)?` <span class="warn" title="Effect chưa render lại được cho tên mới — output sẽ thiếu các effect này: ${f.effects._unsupported.join(', ')}">⚠ ${f.effects._unsupported.join('+')}</span>`:""}</td>
       <td class="${noFont?'warn':'muted'}">${f.font_file||"⚠ thiếu font"}</td>
       <td><span class="sw" style="background:rgb(${r},${g},${b})"></span></td>
       <td><select class="just" data-i="${i}">
@@ -268,6 +274,9 @@ function renderFields(){
   t.querySelectorAll(".arc").forEach(el=>el.oninput=e=>{
     LEARN.fields[e.target.dataset.i].arc=+e.target.value||0; drawBoxes(); });
   t.querySelectorAll(".use").forEach(el=>el.onchange=drawBoxes);
+  const bg = LEARN.background, bn = $("#bgnote");
+  if(bg){ const [r,g,b]=bg.color; bn.innerHTML = `🎨 Đã nhận <b>nền màu đơn</b> (layer "${bg.layer}", <span class="sw" style="background:rgb(${r},${g},${b})"></span>rgb ${r},${g},${b}) → khi chạy batch có thể đổi màu nền từng đơn.`; }
+  else bn.textContent = "";
 }
 
 function scale(){ const img=$("#prev"); return [img.clientWidth/LEARN.canvas[0], img.clientHeight/LEARN.canvas[1]]; }
@@ -403,16 +412,63 @@ function buildEntry(){
   if(!ROWS.length) ROWS = [{}, {}, {}];
   renderEntry();
 }
+const HEX3 = /^#?[0-9a-fA-F]{3}$/, HEX6 = /^#?[0-9a-fA-F]{6}$/;
+function hex6(h){ h=h.replace("#",""); if(h.length===3) h=h.split("").map(x=>x+x).join(""); return "#"+h; }
+function rgbHex(a){ return "#"+a.map(x=>Math.max(0,Math.min(255,x|0)).toString(16).padStart(2,"0")).join(""); }
+function curBg(){ const t=TEMPLATES.find(t=>t.slug===$("#tplsel").value); return t && t.bg ? t.bg : null; }
 function renderEntry(){
-  const C = cols(), t = $("#entry");
-  t.innerHTML = "<tr>" + C.map(c=>`<th>${c}</th>`).join("") + "<th></th></tr>";
+  const C = cols(), t = $("#entry"), bg = curBg();     // bg = màu nền gốc [r,g,b] hoặc null
+  t.innerHTML = "<tr>" + C.map(c=>`<th>${c}</th>`).join("") + (bg?"<th>nền</th>":"") + "<th></th></tr>";
   ROWS.forEach((row,i)=>{
     const tr = document.createElement("tr");
-    tr.innerHTML = C.map(c=>`<td><input data-i="${i}" data-c="${c}" value="${(row[c]||"").replace(/"/g,'&quot;')}"></td>`).join("")
-      + `<td><button data-del="${i}" title="xoá dòng">✕</button></td>`;
+    let html = C.map(c=>{
+      const v = (row[c]||"").replace(/"/g,'&quot;');
+      if(c==="order") return `<td><input class="nm" data-i="${i}" data-c="${c}" value="${v}"></td>`;
+      const hx = (row["__c_"+c]||"");                       // rỗng = giữ màu gốc PSD
+      const wheel = (HEX3.test(hx)||HEX6.test(hx)) ? hex6(hx) : "#000000";
+      return `<td><input class="nm" data-i="${i}" data-c="${c}" value="${v}">`
+        + `<span class="cwrap"><input type="color" class="cw" data-i="${i}" data-c="${c}" value="${wheel}" title="bánh xe màu">`
+        + `<input type="text" class="cx" data-i="${i}" data-c="${c}" placeholder="màu gốc" value="${hx.replace(/"/g,'&quot;')}">`
+        + `<button class="cclr" data-i="${i}" data-c="${c}" title="về màu gốc">↺</button></span></td>`;
+    }).join("");
+    if(bg){                                              // cột nền: 1 màu / đơn, rỗng = nền gốc
+      const hx=(row["__bg"]||""), wheel=(HEX3.test(hx)||HEX6.test(hx))?hex6(hx):rgbHex(bg);
+      html += `<td><span class="cwrap"><input type="color" class="bw" data-i="${i}" value="${wheel}" title="màu nền">`
+        + `<input type="text" class="bx" data-i="${i}" placeholder="nền gốc" value="${hx.replace(/"/g,'&quot;')}">`
+        + `<button class="bclr" data-i="${i}" title="về nền gốc">↺</button></span></td>`;
+    }
+    tr.innerHTML = html + `<td><button data-del="${i}" title="xoá dòng">✕</button></td>`;
     t.appendChild(tr);
   });
-  t.querySelectorAll("input").forEach(el=>el.oninput=e=>ROWS[e.target.dataset.i][e.target.dataset.c]=e.target.value);
+  const q=(cls,i,c)=>t.querySelector(`input.${cls}[data-i="${i}"][data-c="${c}"]`);
+  const qb=(cls,i)=>t.querySelector(`input.${cls}[data-i="${i}"]`);
+  t.querySelectorAll("input.nm").forEach(el=>el.oninput=e=>ROWS[e.target.dataset.i][e.target.dataset.c]=e.target.value);
+  t.querySelectorAll("input.cw").forEach(el=>el.oninput=e=>{           // bánh xe chữ -> hex + lưu
+    const {i,c}=e.target.dataset; ROWS[i]["__c_"+c]=e.target.value;
+    const tx=q("cx",i,c); if(tx) tx.value=e.target.value;
+  });
+  t.querySelectorAll("input.cx").forEach(el=>el.oninput=e=>{           // ô hex chữ -> lưu + đồng bộ
+    const {i,c}=e.target.dataset, hx=e.target.value.trim();
+    ROWS[i]["__c_"+c]=hx;
+    if(HEX3.test(hx)||HEX6.test(hx)){ const wl=q("cw",i,c); if(wl) wl.value=hex6(hx); }
+  });
+  t.querySelectorAll("button.cclr").forEach(b=>b.onclick=e=>{         // chữ về màu gốc
+    const {i,c}=e.target.dataset; ROWS[i]["__c_"+c]="";
+    const tx=q("cx",i,c); if(tx) tx.value=""; const wl=q("cw",i,c); if(wl) wl.value="#000000";
+  });
+  t.querySelectorAll("input.bw").forEach(el=>el.oninput=e=>{           // bánh xe nền -> hex + lưu
+    const i=e.target.dataset.i; ROWS[i]["__bg"]=e.target.value;
+    const tx=qb("bx",i); if(tx) tx.value=e.target.value;
+  });
+  t.querySelectorAll("input.bx").forEach(el=>el.oninput=e=>{           // ô hex nền -> lưu + đồng bộ
+    const i=e.target.dataset.i, hx=e.target.value.trim();
+    ROWS[i]["__bg"]=hx;
+    if(HEX3.test(hx)||HEX6.test(hx)){ const wl=qb("bw",i); if(wl) wl.value=hex6(hx); }
+  });
+  t.querySelectorAll("button.bclr").forEach(b=>b.onclick=e=>{         // nền về màu gốc
+    const i=e.target.dataset.i; ROWS[i]["__bg"]="";
+    const tx=qb("bx",i); if(tx) tx.value=""; const wl=qb("bw",i); if(wl && bg) wl.value=rgbHex(bg);
+  });
   t.querySelectorAll("[data-del]").forEach(b=>b.onclick=e=>{
     ROWS.splice(+e.target.dataset.del,1); if(!ROWS.length) ROWS=[{}]; renderEntry(); });
 }
@@ -496,10 +552,10 @@ $("#btnOpen").onclick = async () => {
 
 // ---------- Hướng dẫn có badge chỉ vào từng chỗ (guided tour) ----------
 const TOUR = [
-  {sel:"#drop", gate:1, h:"1. Thả mẫu magnet", p:"Kéo <b>folder PSD + font</b> (hoặc 1 file PSD) vào ô đang sáng, hoặc bấm <b>Chọn folder / Chọn file</b>. <b>Thả xong hướng dẫn tự sang bước 2</b> để chỉ vào từng chỗ trên chính mẫu của bạn."},
+  {sel:"#drop", gate:1, h:"1. Thả mẫu Custom", p:"Kéo <b>folder PSD + font</b> (hoặc 1 file PSD) vào ô đang sáng, hoặc bấm <b>Chọn folder / Chọn file</b>. <b>Thả xong hướng dẫn tự sang bước 2</b> để chỉ vào từng chỗ trên chính mẫu của bạn."},
   {sel:"#ftable", fb:"#s1", req:1, h:"2. Chọn phần cần đổi", p:"Bảng field: <b>bỏ tick</b> phần cố định (tiêu đề), <b>giữ tick</b> phần khách đổi (tên, năm)."},
   {sel:"#prevwrap", fb:"#s1", req:1, h:"3. Canh chỉnh trên preview", p:"Kéo <b>box</b> để dời/mở rộng (đỡ co chữ). Tên trên cung thì kéo <b>chấm vàng</b> chỉnh độ cong cho khớp."},
-  {sel:"#btnSave", fb:"#s1", req:1, h:"4. Lưu template", p:"Đặt <b>mã magnet</b> rồi bấm <b>Lưu template</b>. Tái dùng mãi, khỏi học lại."},
+  {sel:"#btnSave", fb:"#s1", req:1, h:"4. Lưu template", p:"Đặt <b>mã Custom</b> rồi bấm <b>Lưu template</b>. Tái dùng mãi, khỏi học lại."},
   {sel:"#tplsel", h:"5. Chọn & điền tên", p:"Chọn template, điền vào <b>bảng cột</b> — mỗi dòng 1 đơn. <b>Dán nhiều dòng từ Excel</b> cũng được."},
   {sel:"#btnRender", h:"6. Render & lấy ảnh", p:"Bấm <b>Render tất cả</b>, rồi <b>📂 Mở thư mục ảnh</b> để lấy PNG (giữ đúng <b>DPI gốc</b>). Xong!"},
 ];

@@ -16,7 +16,7 @@ try:                                    # thiếu psd-tools -> chỉ tắt trang
     import magnet
 except Exception as _me:
     magnet = None
-    _MAGNET_ERR = f"Magnet chưa dùng được (thiếu thư viện?): {_me}. Chạy lại setup.bat."
+    _MAGNET_ERR = f"Custom chưa dùng được (thiếu thư viện?): {_me}. Chạy lại setup.bat."
 
 ROOT = Path(__file__).resolve().parent
 HOME = Path(os.path.expanduser("~"))
@@ -329,7 +329,7 @@ async def magnet_learn(request):
     a["preview"].convert("RGB").save(prev)          # PIL image -> file (UI hiển thị)
     return web.json_response({
         "psd": str(psds[0]), "canvas": a["canvas"], "fields": a["fields"],
-        "preview": _magnet_url(prev),
+        "preview": _magnet_url(prev), "background": a.get("background"),
     })
 
 async def magnet_save(request):

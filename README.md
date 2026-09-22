@@ -25,7 +25,18 @@ Windows dùng `setup.bat`/`start.bat`; macOS dùng 2 file `.command` (double-cli
 ./setup-mac.command   # 1 lần: brew cài Python/Node/Git + venv + thư viện + codex + OpenArt(Mac) login
 ./start-mac.command   # chạy app (vòng lặp cho nút Restart), mặc định cổng 8770; ./start-mac.command 9000 để đổi
 ```
-Lần đầu double-click báo "không mở được" → chuột phải → **Open** → **Open** (bỏ chặn Gatekeeper 1 lần). OpenArt bản Mac (arm64 + amd64) đã bundle sẵn trong `bin/`, `setup-mac` tự copy đúng loại máy. Lõi tool + Magnet chạy y hệt Windows; chỉ khác bộ khởi chạy.
+**Nếu double-click báo "không xác minh được / không mở được" (Gatekeeper chặn file tải từ zip) — chọn 1 cách:**
+
+- **Cách A (nhanh nhất, 1 lệnh Terminal, làm 1 lần):** mở **Terminal** (`⌘+Space` → gõ "Terminal"), gõ đoạn sau + **1 dấu cách** ở cuối (chưa Enter):
+  ```
+  xattr -dr com.apple.quarantine 
+  ```
+  rồi **kéo-thả thư mục `studio`** vào cửa sổ Terminal (tự điền đường dẫn) → **Enter**. Xong, double-click chạy bình thường.
+- **Cách B (không cần Terminal):** double-click file `.command` → bấm **Cancel** → vào **System Settings → Privacy & Security** → thấy dòng "…was blocked" → **Open Anyway** → xác nhận. Làm cho cả `setup-mac.command` và `start-mac.command` lần đầu. (macOS Sequoia 15 đã bỏ mẹo chuột-phải → Open cho script nên phải qua đây; máy cũ hơn có thể chuột phải → **Open** → **Open**.)
+
+**Máy Intel (x86_64):** Homebrew bản mới đã bỏ hỗ trợ Intel (báo "only supported on Apple Silicon"). `setup-mac.command` tự nhận diện: máy Intel → cài Python 3.12 (python.org, installer universal2) + Node 20 (nodejs.org) + Git (Xcode Command Line Tools) thay cho Homebrew. Cần macOS 11 (Big Sur) trở lên. Chỉ Apple Silicon mới dùng Homebrew.
+
+OpenArt bản Mac (arm64 + amd64) đã bundle sẵn trong `bin/`, `setup-mac` tự copy đúng loại máy. Lõi tool + Custom chạy y hệt Windows; chỉ khác bộ khởi chạy.
 
 ## Giao diện
 - **Bàn cắt (trên):** hiện real-time — mảnh crop → 4 panel gen → thành phẩm ghép.
@@ -35,8 +46,8 @@ Lần đầu double-click báo "không mở được" → chuột phải → **O
   - **Tách mảnh (pieces):** dàn từng mảnh rập tách rời (thân trước, tay, mũ, túi, ống quần, bo…) trên 1 sheet xám — như tờ rập cắt-may. Mặt trước, mỗi người 1 sheet.
 - **Badge codex hết hạn:** hiện nút *Đăng nhập lại* (chạy `codex login`, hiện URL/mã) khi phát hiện codex lỗi auth.
 
-## Magnet — đổi tên hàng loạt (trang `/magnet`)
-Bấm **🧲 Magnet** ở góc phải. Học 1 lần / loại, tái dùng mãi:
+## Custom — đổi tên hàng loạt (trang `/magnet`)
+Bấm **🏷️ Custom** ở góc phải. Học 1 lần / loại, tái dùng mãi:
 1. **Học mẫu:** thả **PSD + font đi kèm** (nên thả cả folder mẫu). Tool tự dò các layer text → font/màu/vị trí. Bỏ tick field cố định (tiêu đề), giữ phần cần đổi (tên, tàu, năm). **Kéo box** trên preview để dời/mở rộng (box rộng hơn → tên dài đỡ bị co nhỏ). Đặt mã → **Lưu template**.
 2. **Batch:** chọn template → điền thẳng vào **bảng cột** hiện sẵn (mỗi dòng 1 đơn; dán nhiều dòng từ Excel vào bảng cũng được) → **Render** → **Tải zip**. Nút **✎ Đổi tên** để đổi tên template (giữ được tiếng Việt + dấu cách).
 
@@ -44,7 +55,7 @@ Nhớ trong `flat_studio_data/magnet_templates/<slug>/` (base.png đã trống t
 
 **Tên cong (đặt trên cung, vd banner):** tự dò độ cong từ mẫu (cột **Cong** trong bảng field, dương = cong lên). Trên preview hiện đường cong + tay kéo (chấm vàng mép phải) để chỉnh cho khớp. Render vẽ từng chữ xoay theo cung.
 
-**Effect trên layer tên (viền / đổ bóng / đè màu):** tự đọc từ PSD (`layer.effects`) và vẽ lại — **Stroke** (viền), **Drop Shadow** (đổ bóng, kể cả hướng + độ mờ), **Color Overlay** (đè màu chữ). Bevel / gradient / outer glow chưa hỗ trợ. Effect trên phần KHÔNG đổi (nền, tiêu đề) luôn giữ nguyên vì nằm sẵn trong base.png.
+**Effect trên layer tên:** tự đọc từ PSD (`layer.effects`) và vẽ lại — **Stroke** (viền), **Drop Shadow** (bóng, hướng + mờ), **Color Overlay** (đè màu), **Gradient Overlay** (dải màu), **Outer Glow** (hào quang), **Inner Shadow** (bóng trong), **Bevel/Emboss** (nổi khối kim loại — *xấp xỉ ~90%*). Đọc **theo tham số sống** nên đổi số (viền dày/mảnh, màu, góc) tự chạy, không cần sửa code. Chưa dựng: **Satin / Pattern / Inner Glow** → hiện ⚠ tại field khi học mẫu để biết. Effect trên phần KHÔNG đổi (nền, tiêu đề) luôn giữ nguyên vì nằm sẵn trong base.png. Lưu ý: khi 1 layer chồng nhiều effect (vd chrome = bevel+gradient+pattern), thứ tự trộn của Photoshop phức tạp nên kết quả *gần đúng*, không khớp 100% pixel.
 
 ## Pipeline (lõi)
 `dola-seed` (ARK vision) nhìn+crop → `chatgpt-imagegen` (codex) gen, lỗi → **fallback OpenArt Seedream 4.5** → cắt nền + ghép. Xem `flat_pipeline.py`.

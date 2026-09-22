@@ -14,7 +14,7 @@ import io, json, math, os, re, shutil, zipfile
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 from psd_tools import PSDImage
 
 FONT_EXTS = {".ttf", ".otf", ".ttc"}
@@ -118,6 +118,21 @@ def _rgba(c):
     return c if len(c) == 4 else c + (255,)
 
 
+def _hex(s):
+    """'#e01919' / 'e01919' / '#e11' -> (r,g,b,255); None nếu rỗng/không hợp lệ."""
+    if not s:
+        return None
+    s = str(s).strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join(ch * 2 for ch in s)
+    if len(s) != 6:
+        return None
+    try:
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16), 255)
+    except ValueError:
+        return None
+
+
 def _color(d):
     """{Rd,Grn,Bl} trong descriptor effect (thang 0..255) -> (r,g,b)."""
     if not d:
@@ -129,9 +144,11 @@ def _color(d):
 def _effects(layer):
     """Effect trên layer tên: fill (ColorOverlay), stroke, drop shadow. {} nếu không có.
 
-    Vẽ lại bằng Pillow (stroke_width, shadow offset+blur). Bevel/gradient/glow chưa hỗ trợ.
+    Vẽ lại bằng Pillow (stroke_width, shadow offset+blur). Bevel/gradient/glow chưa hỗ trợ:
+    những loại đó gom vào key '_unsupported' để UI cảnh báo (thay vì lặng lẽ bỏ qua).
     """
     out = {}
+    unsupported = []
     try:
         effs = list(layer.effects or [])
     except Exception:
@@ -158,7 +175,52 @@ def _effects(layer):
                 out["shadow"] = {"dx": round(-dist * math.cos(ang)), "dy": round(dist * math.sin(ang)),
                                  "color": list(c), "blur": round(float(e.size)),
                                  "opacity": round(float(e.opacity) * 255 / 100)}
+        elif n == "GradientOverlay":
+            g = _grad(e)
+            if g:
+                out["gradient"] = g                        # tô dải màu vào chữ
+        elif n == "OuterGlow":
+            c = _color(e.color)
+            screen = bytes(getattr(e, "blend_mode", b"")) == b"Scrn"
+            # glow Screen + màu tối = vô hình trong PS -> bỏ (tránh vẽ quầng đen sai)
+            if c and float(e.size) > 0 and not (screen and max(c) < 30):
+                out["glow"] = {"color": list(c), "size": round(float(e.size)),
+                               "opacity": round(float(e.opacity) * 255 / 100)}
+        elif n == "InnerShadow":
+            c = _color(e.color)
+            if c:
+                ang = math.radians(float(e.angle)); dist = float(e.distance)
+                out["inner_shadow"] = {"dx": round(-dist * math.cos(ang)), "dy": round(dist * math.sin(ang)),
+                                       "color": list(c), "blur": round(float(e.size)),
+                                       "opacity": round(float(e.opacity) * 255 / 100)}
+        elif n == "BevelEmboss":
+            out["bevel"] = {"hl": list(_color(e.highlight_color) or (255, 255, 255)),
+                            "sh": list(_color(e.shadow_color) or (0, 0, 0)),
+                            "hl_op": round(float(e.highlight_opacity)), "sh_op": round(float(e.shadow_opacity)),
+                            "angle": float(e.angle), "alt": float(e.altitude)}
+        else:
+            unsupported.append(n)                          # Satin / Pattern / InnerGlow (chưa dựng)
+    if unsupported:
+        out["_unsupported"] = unsupported
     return out
+
+
+def _grad(e):
+    """Gradient overlay -> {stops:[[loc0-1,[r,g,b]]], gtype:'rad'/'lin', angle, reversed}."""
+    try:
+        stops = []
+        for s in e.gradient.get(b"Clrs"):
+            loc = float(s.get(b"Lctn")) / 4096.0
+            c = s.get(b"Clr ")
+            rgb = [int(round(float(c.get(k, 0)))) for k in (b"Rd  ", b"Grn ", b"Bl  ")]
+            stops.append([round(loc, 4), rgb])
+        stops.sort()
+        if len(stops) < 2:
+            return None
+        return {"stops": stops, "gtype": "rad" if b"Rdl" in bytes(e.type) else "lin",
+                "angle": float(e.angle), "reversed": bool(e.reversed)}
+    except Exception:
+        return None
 
 
 def _detect_arc(layer):
@@ -233,16 +295,43 @@ def analyze(psd_path):
             "arc": arc, "effects": _effects(l),
         })
     preview = psd.composite()
-    return {"canvas": list(psd.size), "fields": fields, "preview": preview}
+    bg_name, bg_color = _bg_layer(psd)                    # nền màu đơn đổi được (nếu có)
+    bg = {"layer": bg_name, "color": bg_color} if bg_name else None
+    return {"canvas": list(psd.size), "fields": fields, "preview": preview, "background": bg}
 
 
-# ---------- build base (ẩn field) ----------
-def _build_base(psd_path, layer_names):
+# ---------- phát hiện nền màu đơn ----------
+def _is_solid(layer):
+    """(r,g,b) nếu layer phủ đều 1 màu (solid fill hoặc pixel tô đều); None nếu là artwork."""
+    im = layer.composite(force=True)
+    if im is None:
+        return None
+    rgba = np.asarray(im.convert("RGBA")).reshape(-1, 4)
+    op = rgba[rgba[:, 3] > 200][:, :3]
+    if len(op) < 100 or op.std(0).max() >= 6:       # nhiều màu -> không phải nền
+        return None
+    return [int(x) for x in op.mean(0).round()]
+
+
+def _bg_layer(psd):
+    """Layer nền dưới cùng, phủ hết canvas, 1 màu -> (name, [r,g,b]); (None,None) nếu không có.
+    Bắt cả 2 dạng user hay xuất: Solid Color fill layer VÀ pixel full-canvas tô đều."""
+    W, H = psd.size
+    for l in psd.descendants():                     # descendants() đi từ dưới lên -> lấy nền đáy
+        if l.is_visible() and tuple(l.bbox) == (0, 0, W, H):
+            c = _is_solid(l)
+            if c:
+                return str(l.name), c
+    return None, None
+
+
+# ---------- build base (ẩn field + nền) ----------
+def _build_base(psd_path, layer_names, bg_name=None):
     psd = PSDImage.open(str(psd_path))
     want = set(layer_names)
     for l in psd.descendants():
-        if l.kind == "type" and l.name in want:
-            l.visible = False
+        if (l.kind == "type" and l.name in want) or (bg_name and l.name == bg_name):
+            l.visible = False                       # nền ẩn -> base trong suốt chỗ nền, tô lại lúc render
     return psd.composite(force=True).convert("RGBA")
 
 
@@ -260,7 +349,8 @@ def save_template(psd_path, slug, fields, data_dir):
     tdir = _reg(data_dir) / slug
     (tdir / "fonts").mkdir(parents=True, exist_ok=True)
     dpi = _dpi(PSDImage.open(str(psd_path)))
-    base = _build_base(psd_path, [f["layer"] for f in fields])
+    bg_name, bg_color = _bg_layer(PSDImage.open(str(psd_path)))   # nền màu đơn (nếu có)
+    base = _build_base(psd_path, [f["layer"] for f in fields], bg_name)
     base.save(tdir / "base.png", dpi=(dpi, dpi))
     src_folder = psd_path.parent
     saved = []
@@ -276,6 +366,8 @@ def save_template(psd_path, slug, fields, data_dir):
         saved.append({**f, "font_file": fn})
     tpl = {"slug": slug, "canvas": list(PSDImage.open(str(psd_path)).size),
            "dpi": dpi, "base": "base.png", "fields": saved}
+    if bg_name:
+        tpl["background"] = {"layer": bg_name, "color": bg_color}   # tô lại lúc render, mặc định = màu gốc
     (tdir / "template.json").write_text(json.dumps(tpl, ensure_ascii=False, indent=2), encoding="utf-8")
     return tpl
 
@@ -324,7 +416,8 @@ def list_templates(data_dir):
         j = d / "template.json"
         if j.is_file():
             t = json.loads(j.read_text(encoding="utf-8"))
-            out.append({"slug": t["slug"], "fields": [f["key"] for f in t["fields"]]})
+            out.append({"slug": t["slug"], "fields": [f["key"] for f in t["fields"]],
+                        "bg": (t.get("background") or {}).get("color")})    # None nếu không có nền đổi được
     return out
 
 
@@ -333,7 +426,7 @@ def csv_header(tpl):
 
 
 # ---------- render ----------
-def _draw_field(img, f, tdir, value):
+def _draw_field(img, f, tdir, value, override=None):
     x0, y0, x1, y1 = f["box"]
     box_w = max(1, x1 - x0)
     fpath = tdir / "fonts" / f["font_file"]
@@ -343,19 +436,38 @@ def _draw_field(img, f, tdir, value):
     if w > box_w:                                   # auto-shrink cho vừa bề ngang
         size = max(4, int(size * box_w / w))
         font = ImageFont.truetype(str(fpath), size)
+    oc = _hex(override)                             # mã màu người dùng nhập (rỗng -> giữ màu PSD)
     if f.get("arc"):                                # tên đặt trên cung (banner)
-        _draw_arc(img, f, font, value, size)
+        _draw_arc(img, f, font, value, size, oc)
         return
     fx = f.get("effects") or {}
-    fill = _rgba(fx.get("fill") or f["color"])
+    fill = oc or _rgba(fx.get("fill") or f["color"])
     sw = int(fx.get("stroke") or 0)
     scol = _rgba(fx.get("stroke_color") or (0, 0, 0))
     just = f.get("justify", "center")
     ax = {"left": x0, "right": x1, "center": (x0 + x1) / 2}[just]
     anchor = {"left": "l", "right": "r", "center": "m"}[just] + "s"   # +baseline
     baseline = y0 + f["top_frac"] * size
+    grad, bev, glow, insh = fx.get("gradient"), fx.get("bevel"), fx.get("glow"), fx.get("inner_shadow")
+    if oc:                                          # ép màu chữ đặc theo mã nhập; giữ viền/bóng/glow
+        grad = bev = insh = None
+
+    # ---- 1. outer glow (xa nhất, sau chữ) ----
+    if glow:
+        gc = _rgba(glow["color"])
+        lay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        sil = Image.new("L", img.size, 0)
+        ImageDraw.Draw(sil).text((ax, baseline), value, font=font, fill=255, anchor=anchor)
+        col = Image.new("RGBA", img.size, gc[:3] + (0,)); col.putalpha(sil)
+        lay = col.filter(ImageFilter.GaussianBlur(max(1, glow["size"])))
+        op = glow.get("opacity", 255)
+        if op < 255:
+            lay.putalpha(lay.split()[3].point(lambda p: p * op // 255))
+        img.alpha_composite(lay)
+
+    # ---- 2. drop shadow ----
     sh = fx.get("shadow")
-    if sh:                                          # đổ bóng: vẽ bản silhouette lệch + mờ, ghép phía sau
+    if sh:
         sc = _rgba(sh["color"])
         lay = Image.new("RGBA", img.size, (0, 0, 0, 0))
         ImageDraw.Draw(lay).text((ax + sh["dx"], baseline + sh["dy"]), value, font=font,
@@ -366,18 +478,97 @@ def _draw_field(img, f, tdir, value):
         if op < 255:
             lay.putalpha(lay.split()[3].point(lambda p: p * op // 255))
         img.alpha_composite(lay)
-    draw = ImageDraw.Draw(img)
-    draw.text((ax, baseline), value, font=font, fill=fill, anchor=anchor,
-              stroke_width=sw, stroke_fill=scol)
+
+    # ---- fast-path: fill đặc, không effect fill đặc biệt -> vẽ 1 lệnh (như cũ, đã kiểm) ----
+    if not (grad or bev or insh):
+        ImageDraw.Draw(img).text((ax, baseline), value, font=font, fill=fill, anchor=anchor,
+                                 stroke_width=sw, stroke_fill=scol)
+        return
+
+    # ---- fill nâng cao (gradient / bevel): cần alpha mask của chữ ----
+    amask = Image.new("L", img.size, 0)
+    ImageDraw.Draw(amask).text((ax, baseline), value, font=font, fill=255, anchor=anchor)
+    bbox = amask.getbbox()
+    # 3. stroke (viền) vẽ TRƯỚC fill để nằm dưới
+    if sw:
+        st = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        ImageDraw.Draw(st).text((ax, baseline), value, font=font, fill=(0, 0, 0, 0),
+                                anchor=anchor, stroke_width=sw, stroke_fill=scol)
+        img.alpha_composite(st)
+    # 4. fill: bevel > gradient > solid
+    if bev:
+        rgb = _bevel_fill(amask, bev)
+    elif grad:
+        rgb = _grad_fill(img.size, bbox, grad)
+    else:
+        rgb = None
+    if rgb is not None:
+        fi = Image.fromarray(rgb, "RGB").convert("RGBA"); fi.putalpha(amask)
+        img.alpha_composite(fi)
+    # 5. inner shadow (bóng tối bên trong chữ)
+    if insh:
+        ic = _rgba(insh["color"])
+        shp = Image.new("L", img.size, 0)
+        ImageDraw.Draw(shp).text((ax + insh["dx"], baseline + insh["dy"]), value, font=font,
+                                 fill=255, anchor=anchor)
+        if insh.get("blur"):
+            shp = shp.filter(ImageFilter.GaussianBlur(insh["blur"]))
+        # tối = phần trong chữ KHÔNG được silhouette-lệch phủ
+        dark = ImageChops.subtract(amask, shp)
+        op = insh.get("opacity", 255)
+        lay = Image.new("RGBA", img.size, ic[:3] + (0,))
+        lay.putalpha(dark.point(lambda p: p * op // 255))
+        img.alpha_composite(lay)
 
 
-def _draw_arc(img, f, font, value, size):
+def _grad_fill(size_wh, bbox, grad):
+    """Ảnh RGB gradient trải trên bbox chữ (dọc theo angle / radial). Ngoài bbox = màu mép."""
+    W, H = size_wh
+    stops = grad["stops"]
+    if grad.get("reversed"):
+        stops = [[1 - l, c] for l, c in stops][::-1]
+    locs = np.array([l for l, _ in stops]); cols = np.array([c for _, c in stops], float)
+    bx0, by0, bx1, by1 = bbox; bw, bh = max(1, bx1 - bx0), max(1, by1 - by0)
+    yy, xx = np.mgrid[0:H, 0:W].astype(float)
+    if grad["gtype"] == "rad":
+        cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2
+        t = np.clip(np.sqrt(((xx - cx) / (bw / 2)) ** 2 + ((yy - cy) / (bh / 2)) ** 2), 0, 1)
+    else:
+        a = math.radians(grad["angle"])
+        u = np.cos(a) * ((xx - bx0) / bw - .5) - np.sin(a) * ((yy - by0) / bh - .5)
+        t = np.clip(u + .5, 0, 1)
+    r = np.interp(t, locs, cols[:, 0]); g = np.interp(t, locs, cols[:, 1]); b = np.interp(t, locs, cols[:, 2])
+    return np.stack([r, g, b], -1).astype(np.uint8)
+
+
+def _bevel_fill(amask, bev):
+    """Silver/emboss: nền kim loại (trung điểm hl/sh) + highlight mép sáng + shadow mép tối theo góc sáng."""
+    a = np.asarray(amask).astype(np.float32) / 255.0
+    H, W = a.shape
+    # nền kim loại = trung điểm highlight/shadow của chính bevel (bạc/vàng tuỳ màu bevel).
+    # Bevel trong PS đè lên fill, nên nền trung tính này cho ánh kim đúng hơn là dùng gradient bên dưới.
+    metal = (np.array(bev["hl"], np.float32) + np.array(bev["sh"], np.float32)) / 2
+    base = np.ones((H, W, 3), np.float32) * metal
+    gy, gx = np.gradient(a)
+    ang = math.radians(bev["angle"]); alt = math.radians(bev["alt"])
+    lx, ly, lz = math.cos(alt) * math.cos(ang), math.cos(alt) * math.sin(ang), math.sin(alt)
+    k = 0.05
+    nz = np.sqrt(gx * gx + gy * gy + k * k)
+    dot = (-gx * lx + gy * ly + k * lz) / np.maximum(nz, 1e-6)      # -1..1 (dương=hướng sáng)
+    hl = np.array(bev["hl"], np.float32); sh = np.array(bev["sh"], np.float32)
+    pos = np.clip(dot, 0, 1)[..., None] * (bev["hl_op"] / 100)
+    neg = np.clip(-dot, 0, 1)[..., None] * (bev["sh_op"] / 100)
+    out = base + pos * (hl - base) + neg * (sh - base)
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def _draw_arc(img, f, font, value, size, override=None):
     """Vẽ từng chữ dọc theo parabol: đỉnh ở giữa box, hai mép thấp hơn |arc| px.
     arc>0 = cong lên (cười); mỗi glyph xoay tiếp tuyến với cung."""
     x0, y0, x1, y1 = f["box"]
     W = max(1, x1 - x0); xc = (x0 + x1) / 2
     arc = float(f["arc"])
-    color = tuple(f["color"])
+    color = override or tuple(f["color"])
     just = f.get("justify", "center")
     tot = font.getlength(value)
     startx = {"left": x0, "right": x1 - tot, "center": xc - tot / 2}[just]
@@ -398,12 +589,19 @@ def _draw_arc(img, f, font, value, size):
 
 
 def render_one(tpl, tdir, values):
-    """values: {key: text}. Trả ảnh RGBA đã vẽ tên mới."""
-    img = Image.open(tdir / tpl["base"]).convert("RGBA")
+    """values: {key: text, __c_<key>: hex, __bg: hex}. Trả ảnh RGBA đã vẽ tên mới."""
+    base = Image.open(tdir / tpl["base"]).convert("RGBA")
+    bg = tpl.get("background")
+    if bg:                                          # tô nền (mã user nhập, rỗng -> màu gốc) rồi dán art lên
+        oc = _hex(values.get("__bg")) or _rgba(bg["color"])
+        img = Image.new("RGBA", base.size, tuple(oc[:3]) + (255,))
+        img.alpha_composite(base)
+    else:
+        img = base                                  # template cũ: nền đã bake trong base.png
     for f in tpl["fields"]:
         v = values.get(f["key"], "")
         if v != "":
-            _draw_field(img, f, tdir, str(v))
+            _draw_field(img, f, tdir, str(v), values.get("__c_" + f["key"]))
     return img
 
 
@@ -436,9 +634,31 @@ def zip_paths(paths, zip_path):
 
 
 # ---------- self-check ----------
+def _selfcheck_effects():
+    """Kiểm cơ chế render effect (không cần PSD): gradient biến thiên, bevel sáng-tối 2 phía."""
+    m = Image.new("L", (300, 300), 0)
+    ImageDraw.Draw(m).ellipse((60, 60, 240, 240), fill=255)   # glyph tròn giả
+    bbox = m.getbbox()
+    # gradient dọc: đỉnh khác đáy
+    g = _grad_fill((300, 300), bbox, {"stops": [[0.0, [20, 20, 20]], [1.0, [230, 230, 230]]],
+                                      "gtype": "lin", "angle": 90.0, "reversed": False})
+    assert abs(int(g[bbox[1] + 5, 150, 0]) - int(g[bbox[3] - 5, 150, 0])) > 100, "gradient không biến thiên dọc"
+    # bevel: highlight (mép hướng sáng) sáng hơn shadow (mép đối diện)
+    b = _bevel_fill(m, {"hl": [255, 255, 255], "sh": [0, 0, 0], "hl_op": 100, "sh_op": 100,
+                        "angle": 90.0, "alt": 30.0})
+    lum = b[..., 0][np.asarray(m) > 128]                      # độ sáng trong glyph
+    assert lum.max() - lum.min() > 60, f"bevel không tạo tương phản ({lum.min()}..{lum.max()})"
+    # hex override: 3 dạng hợp lệ + loại rỗng/sai
+    assert _hex("#e01919") == (224, 25, 25, 255) and _hex("e01919") == (224, 25, 25, 255)
+    assert _hex("#f00") == (255, 0, 0, 255)
+    assert _hex("") is None and _hex(None) is None and _hex("xyz") is None and _hex("#12") is None
+    print(f"OK self-check effect: gradient biến thiên; bevel sáng-tối {lum.min()}..{lum.max()}; hex parse OK")
+
+
 def _demo():
     """Học 1 PSD mẫu rồi render tên mới — kiểm tra pipeline không vỡ."""
     import tempfile
+    _selfcheck_effects()
     sample = os.getenv("MAGNET_SAMPLE")
     if not sample or not Path(sample).is_file():
         print("skip demo (đặt MAGNET_SAMPLE=<đường dẫn .psd> để chạy)")
