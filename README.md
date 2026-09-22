@@ -44,6 +44,8 @@ Nhớ trong `flat_studio_data/magnet_templates/<slug>/` (base.png đã trống t
 
 **Tên cong (đặt trên cung, vd banner):** tự dò độ cong từ mẫu (cột **Cong** trong bảng field, dương = cong lên). Trên preview hiện đường cong + tay kéo (chấm vàng mép phải) để chỉnh cho khớp. Render vẽ từng chữ xoay theo cung.
 
+**Effect trên layer tên (viền / đổ bóng / đè màu):** tự đọc từ PSD (`layer.effects`) và vẽ lại — **Stroke** (viền), **Drop Shadow** (đổ bóng, kể cả hướng + độ mờ), **Color Overlay** (đè màu chữ). Bevel / gradient / outer glow chưa hỗ trợ. Effect trên phần KHÔNG đổi (nền, tiêu đề) luôn giữ nguyên vì nằm sẵn trong base.png.
+
 ## Pipeline (lõi)
 `dola-seed` (ARK vision) nhìn+crop → `chatgpt-imagegen` (codex) gen, lỗi → **fallback OpenArt Seedream 4.5** → cắt nền + ghép. Xem `flat_pipeline.py`.
 

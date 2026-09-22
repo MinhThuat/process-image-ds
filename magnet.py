@@ -14,7 +14,7 @@ import io, json, math, os, re, shutil, zipfile
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from psd_tools import PSDImage
 
 FONT_EXTS = {".ttf", ".otf", ".ttc"}
@@ -112,6 +112,55 @@ def _calibrate(font_file: Path, text, box):
         return box_h, 0.8
 
 
+def _rgba(c):
+    """list/tuple màu -> (r,g,b,a) 4 phần tử."""
+    c = tuple(int(x) for x in c)
+    return c if len(c) == 4 else c + (255,)
+
+
+def _color(d):
+    """{Rd,Grn,Bl} trong descriptor effect (thang 0..255) -> (r,g,b)."""
+    if not d:
+        return None
+    v = [float(d.get(b"Rd  ", 0)), float(d.get(b"Grn ", 0)), float(d.get(b"Bl  ", 0))]
+    return tuple(max(0, min(255, int(round(x)))) for x in v)
+
+
+def _effects(layer):
+    """Effect trên layer tên: fill (ColorOverlay), stroke, drop shadow. {} nếu không có.
+
+    Vẽ lại bằng Pillow (stroke_width, shadow offset+blur). Bevel/gradient/glow chưa hỗ trợ.
+    """
+    out = {}
+    try:
+        effs = list(layer.effects or [])
+    except Exception:
+        return out
+    for e in effs:
+        if not getattr(e, "enabled", True):
+            continue
+        n = type(e).__name__
+        if n == "ColorOverlay":
+            c = _color(e.color)
+            if c:
+                out["fill"] = list(c)                      # đè màu chữ
+        elif n == "Stroke" and float(e.size) > 0:
+            c = _color(e.color)
+            if c:
+                # PS "outside" ~ gấp đôi bề rộng Pillow (Pillow vẽ stroke giữa nét)
+                mul = 2 if e.position == b"OutF" else 1
+                out["stroke"] = round(float(e.size) * mul)
+                out["stroke_color"] = list(c)
+        elif n == "DropShadow":
+            c = _color(e.color)
+            if c:
+                ang = math.radians(float(e.angle)); dist = float(e.distance)
+                out["shadow"] = {"dx": round(-dist * math.cos(ang)), "dy": round(dist * math.sin(ang)),
+                                 "color": list(c), "blur": round(float(e.size)),
+                                 "opacity": round(float(e.opacity) * 255 / 100)}
+    return out
+
+
 def _detect_arc(layer):
     """Độ cong (sagitta px, dương = cong lên/cười) của tên đặt trên cung. 0 = thẳng.
 
@@ -181,7 +230,7 @@ def analyze(psd_path):
             "font_file": ff.name if ff else "",
             "color": list(color), "justify": just,
             "box": box, "size_px": size_px, "top_frac": round(top_frac, 4),
-            "arc": arc,
+            "arc": arc, "effects": _effects(l),
         })
     preview = psd.composite()
     return {"canvas": list(psd.size), "fields": fields, "preview": preview}
@@ -297,12 +346,29 @@ def _draw_field(img, f, tdir, value):
     if f.get("arc"):                                # tên đặt trên cung (banner)
         _draw_arc(img, f, font, value, size)
         return
-    draw = ImageDraw.Draw(img)
+    fx = f.get("effects") or {}
+    fill = _rgba(fx.get("fill") or f["color"])
+    sw = int(fx.get("stroke") or 0)
+    scol = _rgba(fx.get("stroke_color") or (0, 0, 0))
     just = f.get("justify", "center")
     ax = {"left": x0, "right": x1, "center": (x0 + x1) / 2}[just]
     anchor = {"left": "l", "right": "r", "center": "m"}[just] + "s"   # +baseline
     baseline = y0 + f["top_frac"] * size
-    draw.text((ax, baseline), value, font=font, fill=tuple(f["color"]), anchor=anchor)
+    sh = fx.get("shadow")
+    if sh:                                          # đổ bóng: vẽ bản silhouette lệch + mờ, ghép phía sau
+        sc = _rgba(sh["color"])
+        lay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        ImageDraw.Draw(lay).text((ax + sh["dx"], baseline + sh["dy"]), value, font=font,
+                                 fill=sc, anchor=anchor, stroke_width=sw, stroke_fill=sc)
+        if sh.get("blur"):
+            lay = lay.filter(ImageFilter.GaussianBlur(sh["blur"]))
+        op = sh.get("opacity", 255)
+        if op < 255:
+            lay.putalpha(lay.split()[3].point(lambda p: p * op // 255))
+        img.alpha_composite(lay)
+    draw = ImageDraw.Draw(img)
+    draw.text((ax, baseline), value, font=font, fill=fill, anchor=anchor,
+              stroke_width=sw, stroke_fill=scol)
 
 
 def _draw_arc(img, f, font, value, size):
