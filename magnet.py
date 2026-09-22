@@ -422,6 +422,8 @@ def render_rows(slug, rows, data_dir, out_dir):
         img = render_one(tpl, tdir, row)
         p = out_dir / f"{i:03d}_{safe}.png"             # prefix index -> không đè nhau
         img.save(p, dpi=(dpi, dpi))                     # giữ DPI gốc của PSD (vd 300)
+        img.convert("RGB").save(p.with_suffix(".jpg"),  # xuất kèm JPG (nền trắng)
+                                quality=95, dpi=(dpi, dpi))
         paths.append(p)
     return paths
 
