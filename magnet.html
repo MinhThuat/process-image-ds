@@ -75,6 +75,11 @@
   #tourTip .nav button{padding:5px 11px;font-size:12px}
   #tourClose{position:absolute;top:8px;right:10px;border:0;background:transparent;color:var(--muted);
     font-size:16px;padding:0;cursor:pointer;line-height:1}
+  #tour.gate{pointer-events:none}                 /* b1: cho thao tac that voi trang */
+  #tour.gate #tourTip{pointer-events:auto}
+  #tourHole.wait{border-style:dashed;animation:pulse 1.2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 9999px rgba(4,10,8,.74),0 0 0 2px var(--pin)}
+    50%{box-shadow:0 0 0 9999px rgba(4,10,8,.74),0 0 22px 4px var(--pin)}}
   #busy{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;
     justify-content:center;gap:14px;background:rgba(6,12,10,.72);backdrop-filter:blur(1px)}
   #busy.hidden{display:none}   /* id > .hidden về specificity, phải override riêng */
@@ -156,6 +161,7 @@
     <button id="tourClose" title="đóng">✕</button>
     <h4 id="tourH"></h4><p id="tourP"></p>
     <div class="nav"><span class="step" id="tourStep"></span>
+      <button id="tourSkip">Bỏ qua ▷</button>
       <button id="tourPrev">← Trước</button>
       <button id="tourNext" class="hot">Tiếp →</button></div>
   </div>
@@ -225,6 +231,7 @@ async function learn(files){
     $("#prev").onload = drawBoxes;
     $("#prev").src = j.preview;
     msg(`Dò được ${j.fields.length} field.`);
+    tourOnLearned();                              // đang trong tour bước 1 -> tự sang bước 2
   } finally { busy(false); }
 }
 
@@ -488,30 +495,41 @@ $("#btnOpen").onclick = async () => {
 
 // ---------- Hướng dẫn có badge chỉ vào từng chỗ (guided tour) ----------
 const TOUR = [
-  {sel:"#drop", h:"1. Thả mẫu magnet", p:"Kéo <b>folder PSD + font</b> vào đây, hoặc bấm <b>Chọn folder / Chọn file</b>. Tool tự đọc PSD, dò layer chữ + font + vị trí. Làm 1 lần mỗi loại."},
-  {sel:"#ftable", fb:"#s1", h:"2. Chọn phần cần đổi", p:"Bảng field hiện sau khi thả mẫu: <b>bỏ tick</b> phần cố định (tiêu đề), <b>giữ tick</b> phần khách đổi (tên, năm)."},
-  {sel:"#prevwrap", fb:"#s1", h:"3. Canh chỉnh trên preview", p:"Kéo <b>box</b> để dời/mở rộng (đỡ co chữ). Tên trên cung thì kéo <b>chấm vàng</b> chỉnh độ cong cho khớp."},
-  {sel:"#btnSave", fb:"#s1", h:"4. Lưu template", p:"Đặt <b>mã magnet</b> rồi bấm <b>Lưu template</b>. Tái dùng mãi, khỏi học lại."},
+  {sel:"#drop", gate:1, h:"1. Thả mẫu magnet", p:"Kéo <b>folder PSD + font</b> (hoặc 1 file PSD) vào ô đang sáng, hoặc bấm <b>Chọn folder / Chọn file</b>. <b>Thả xong hướng dẫn tự sang bước 2</b> để chỉ vào từng chỗ trên chính mẫu của bạn."},
+  {sel:"#ftable", fb:"#s1", req:1, h:"2. Chọn phần cần đổi", p:"Bảng field: <b>bỏ tick</b> phần cố định (tiêu đề), <b>giữ tick</b> phần khách đổi (tên, năm)."},
+  {sel:"#prevwrap", fb:"#s1", req:1, h:"3. Canh chỉnh trên preview", p:"Kéo <b>box</b> để dời/mở rộng (đỡ co chữ). Tên trên cung thì kéo <b>chấm vàng</b> chỉnh độ cong cho khớp."},
+  {sel:"#btnSave", fb:"#s1", req:1, h:"4. Lưu template", p:"Đặt <b>mã magnet</b> rồi bấm <b>Lưu template</b>. Tái dùng mãi, khỏi học lại."},
   {sel:"#tplsel", h:"5. Chọn & điền tên", p:"Chọn template, điền vào <b>bảng cột</b> — mỗi dòng 1 đơn. <b>Dán nhiều dòng từ Excel</b> cũng được."},
   {sel:"#btnRender", h:"6. Render & lấy ảnh", p:"Bấm <b>Render tất cả</b>, rồi <b>📂 Mở thư mục ảnh</b> để lấy PNG (giữ đúng <b>DPI gốc</b>). Xong!"},
 ];
-let TI = 0;
+let TI = 0, tourRO = false;
 const vis = el => el && el.getClientRects().length > 0;
+const gateReady = () => vis(document.querySelector("#ftable"));   // đã thả mẫu xong
 function tgt(s){ let e=document.querySelector(s.sel); if(vis(e)) return e;
   if(s.fb){ e=document.querySelector(s.fb); if(vis(e)) return e; } return null; }
 function showTour(i){
   TI = (i + TOUR.length) % TOUR.length;
   const s = TOUR[TI], el = tgt(s);
-  $("#tour").classList.add("on");
-  $("#tourH").innerHTML = s.h; $("#tourP").innerHTML = s.p;
-  $("#tourStep").textContent = `Bước ${TI+1}/${TOUR.length}`;
-  $("#tourNext").textContent = TI===TOUR.length-1 ? "Xong ✓" : "Tiếp →";
-  $("#tourPrev").style.visibility = TI ? "visible" : "hidden";
+  const waiting = !!s.gate && !gateReady() && !tourRO;    // b1 chờ thả mẫu thật
+  const last = TI===TOUR.length-1;
   const hole=$("#tourHole"), tip=$("#tourTip");
+  $("#tour").classList.add("on");
+  $("#tour").classList.toggle("gate", waiting);            // cho thao tác với trang khi chờ
+  hole.classList.toggle("wait", waiting);
+  let p = s.p;
+  if(s.req && !gateReady()) p += " <br><i class='muted'>(khu này hiện sau khi bạn thả mẫu ở bước 1)</i>";
+  $("#tourH").innerHTML = s.h; $("#tourP").innerHTML = p;
+  $("#tourStep").textContent = `Bước ${TI+1}/${TOUR.length}`;
+  $("#tourNext").textContent = last ? "Xong ✓" : (waiting ? "⏳ đang chờ thả mẫu…" : "Tiếp →");
+  $("#tourNext").disabled = waiting;
+  $("#tourSkip").style.display = waiting ? "inline-block" : "none";
+  $("#tourPrev").style.visibility = TI ? "visible" : "hidden";
   if(el){ el.scrollIntoView({block:"center", behavior:"smooth"}); setTimeout(()=>place(el,hole,tip), 280); }
   else{ hole.style.width="0"; hole.style.height="0";
     tip.style.transform="translate(-50%,-50%)"; tip.style.left="50%"; tip.style.top="42%"; }
 }
+// gọi khi học mẫu xong: nếu tour đang chờ ở bước 1 -> tự sang bước 2
+function tourOnLearned(){ if($("#tour").classList.contains("on") && TI===0) setTimeout(()=>showTour(1), 500); }
 function place(el,hole,tip){
   const r=el.getBoundingClientRect(), pad=6;
   hole.style.left=(r.left-pad)+"px"; hole.style.top=(r.top-pad)+"px";
@@ -525,9 +543,10 @@ function place(el,hole,tip){
 function reposTour(){ if(!$("#tour").classList.contains("on")) return;
   const el=tgt(TOUR[TI]); if(el) place(el,$("#tourHole"),$("#tourTip")); }
 function endTour(){ $("#tour").classList.remove("on"); try{localStorage.setItem("magnet_tour","1")}catch(e){} }
-$("#btnTour").onclick = () => showTour(0);
+$("#btnTour").onclick = () => { tourRO=false; showTour(0); };
 $("#tourNext").onclick = () => TI===TOUR.length-1 ? endTour() : showTour(TI+1);
 $("#tourPrev").onclick = () => showTour(TI-1);
+$("#tourSkip").onclick = () => { tourRO=true; showTour(1); };   // đọc lướt, không cần thả mẫu
 $("#tourClose").onclick = endTour;
 $("#tour").addEventListener("click", e => { if(e.target.id==="tour") endTour(); });
 window.addEventListener("resize", reposTour);
