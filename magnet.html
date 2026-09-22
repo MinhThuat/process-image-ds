@@ -62,6 +62,13 @@
   .cwrap .cw{width:24px;height:24px;padding:0;border:1px solid var(--line);border-radius:5px;background:none;cursor:pointer;flex:0 0 auto}
   .cwrap .cx{width:74px;padding:4px 5px;font-size:11px}
   .cwrap .cclr{padding:2px 6px;font-size:12px;line-height:1;flex:0 0 auto}
+  .combo{position:relative;display:inline-block}
+  #tplsearch{width:230px}
+  .results{position:absolute;left:0;top:100%;z-index:30;min-width:100%;max-height:260px;overflow:auto;
+    background:#0e1917;border:1px solid var(--line);border-radius:8px;margin-top:3px;box-shadow:0 10px 30px rgba(0,0,0,.55)}
+  .results .it{padding:6px 10px;cursor:pointer;font-size:13px;white-space:nowrap}
+  .results .it.active{background:#1d2f2a;color:var(--pin)}
+  .results .none{padding:6px 10px;color:var(--muted);font-size:12px;white-space:nowrap}
   #msg{min-height:18px;margin-top:8px}
   .hidden{display:none}
   .tourbar{display:flex;align-items:center;gap:10px;background:#0c1614;border:1px solid var(--line);
@@ -139,7 +146,8 @@
 <section id="s2">
   <h2><span class="n">2</span>Chạy đổi tên hàng loạt</h2>
   <div class="row">
-    <label>Template: <select id="tplsel"></select></label>
+    <label>Template: <span class="combo"><input id="tplsearch" placeholder="🔍 tìm / chọn template" autocomplete="off"><div id="tplresults" class="results hidden"></div></span></label>
+    <select id="tplsel" class="hidden"></select>
     <button id="btnRename">✎ Đổi tên</button>
     <button id="btnDelete" class="hot">🗑 Xoá</button>
     <button id="btnReload">↻</button>
@@ -387,13 +395,55 @@ async function loadTemplates(sel){
   const j = await (await fetch("/magnet/templates")).json();
   fillTemplates(j.templates, sel);
 }
+// ---- combobox tìm/chọn template (gõ -> list dưới, ↑↓ + Enter chọn) ----
+let ACT = -1;                                          // dòng đang sáng trong list gợi ý
+function tplFilter(){
+  const q = ($("#tplsearch").value||"").trim().toLowerCase();
+  return q ? TEMPLATES.filter(t=>t.slug.toLowerCase().includes(q)) : TEMPLATES;
+}
+function renderResults(){
+  const box = $("#tplresults"), list = tplFilter();
+  box.classList.remove("hidden");
+  if(!list.length){ box.innerHTML = `<div class="none">không có template khớp</div>`; ACT=-1; return; }
+  if(ACT<0 || ACT>=list.length) ACT = 0;
+  box.innerHTML = list.map((t,i)=>`<div class="it${i===ACT?' active':''}" data-slug="${t.slug.replace(/"/g,'&quot;')}">${t.slug} <span class="muted">(${t.fields.join(", ")})</span></div>`).join("");
+  box.querySelectorAll(".it").forEach((el,i)=>{
+    el.onmousedown = e=>{ e.preventDefault(); pickTpl(el.dataset.slug); };   // mousedown: chọn trước khi input blur
+    el.onmouseenter = ()=>{ ACT=i; hlResults(); };
+  });
+}
+function hlResults(){
+  const box = $("#tplresults");
+  box.querySelectorAll(".it").forEach((el,i)=>el.classList.toggle("active", i===ACT));
+  const a = box.querySelector(".it.active"); if(a) a.scrollIntoView({block:"nearest"});
+}
+function hideResults(){ $("#tplresults").classList.add("hidden"); }
+function pickTpl(slug){
+  if(TEMPLATES.some(t=>t.slug===slug)){ $("#tplsel").value=slug; $("#tplsearch").value=slug; }
+  hideResults(); renderEntry(); showBase();
+}
 function fillTemplates(list, sel){
   TEMPLATES = list;
-  const s = $("#tplsel");
-  s.innerHTML = list.map(t=>`<option value="${t.slug}">${t.slug} (${t.fields.join(", ")})</option>`).join("");
-  if(sel) s.value = sel;
+  $("#tplsel").innerHTML = list.map(t=>`<option value="${t.slug.replace(/"/g,'&quot;')}">${t.slug}</option>`).join("");
+  const target = (sel && list.some(t=>t.slug===sel)) ? sel : (list[0] ? list[0].slug : "");
+  $("#tplsel").value = target; $("#tplsearch").value = target;
   buildEntry(); showBase();
 }
+(function(){
+  const S = $("#tplsearch");
+  S.oninput  = () => { ACT = 0; renderResults(); };
+  S.onfocus  = () => { S.select(); ACT = -1; renderResults(); };
+  S.onblur   = () => setTimeout(()=>{ hideResults(); S.value = $("#tplsel").value; }, 120);
+  S.onkeydown = e => {
+    const list = tplFilter();
+    if(e.key==="ArrowDown"){ e.preventDefault();
+      if($("#tplresults").classList.contains("hidden")){ renderResults(); return; }
+      ACT = Math.min(ACT+1, list.length-1); hlResults(); }
+    else if(e.key==="ArrowUp"){ e.preventDefault(); ACT = Math.max(ACT-1, 0); hlResults(); }
+    else if(e.key==="Enter"){ e.preventDefault(); if(list[ACT]) pickTpl(list[ACT].slug); }
+    else if(e.key==="Escape"){ hideResults(); S.blur(); }
+  };
+})();
 async function showBase(){
   const slug = $("#tplsel").value;
   if(!slug){ $("#bprevwrap").classList.add("hidden"); return; }
