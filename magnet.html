@@ -59,20 +59,22 @@
   .sw{display:inline-block;width:16px;height:16px;border-radius:3px;border:1px solid var(--line);vertical-align:middle;margin-right:5px}
   #msg{min-height:18px;margin-top:8px}
   .hidden{display:none}
-  .guide{background:#0c1614;border:1px solid var(--line);border-radius:var(--r);margin-bottom:18px}
-  .guide>summary{cursor:pointer;padding:14px 16px;font-size:14px;font-weight:600;letter-spacing:.03em;list-style:none}
-  .guide>summary::-webkit-details-marker{display:none}
-  .guide>summary::before{content:"▸";color:var(--pin);margin-right:8px;display:inline-block;transition:transform .15s}
-  .guide[open]>summary::before{transform:rotate(90deg)}
-  .journey{padding:4px 18px 18px}
-  .jstep{position:relative;padding:0 0 20px 44px}
-  .jstep::before{content:"";position:absolute;left:15px;top:26px;bottom:-2px;width:2px;background:var(--line)}
-  .jstep:last-child::before{display:none}
-  .jnum{position:absolute;left:0;top:0;width:32px;height:32px;border-radius:50%;background:var(--pin);
-    color:#1a1200;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:14px}
-  .jstep h3{margin:4px 0 3px;font-size:13.5px}
-  .jstep p{margin:0;color:var(--muted);font-size:12.5px;line-height:1.55}
-  .jstep b{color:var(--chalk)}
+  .tourbar{display:flex;align-items:center;gap:10px;background:#0c1614;border:1px solid var(--line);
+    border-radius:var(--r);padding:12px 16px;margin-bottom:18px;color:var(--muted);font-size:13px}
+  #tour{position:fixed;inset:0;z-index:60;display:none}
+  #tour.on{display:block}
+  #tourHole{position:fixed;border-radius:8px;border:2px solid var(--pin);pointer-events:none;
+    box-shadow:0 0 0 9999px rgba(4,10,8,.74);transition:top .2s,left .2s,width .2s,height .2s}
+  #tourTip{position:fixed;max-width:300px;background:#12211d;border:1px solid var(--pin);
+    border-radius:10px;padding:14px;box-shadow:0 10px 34px rgba(0,0,0,.55)}
+  #tourTip h4{margin:0 0 6px;font-size:14px;color:var(--pin)}
+  #tourTip p{margin:0 0 12px;font-size:12.5px;color:var(--chalk);line-height:1.55}
+  #tourTip b{color:#fff}
+  #tourTip .nav{display:flex;gap:8px;align-items:center}
+  #tourTip .nav .step{flex:1;color:var(--muted);font-size:11px}
+  #tourTip .nav button{padding:5px 11px;font-size:12px}
+  #tourClose{position:absolute;top:8px;right:10px;border:0;background:transparent;color:var(--muted);
+    font-size:16px;padding:0;cursor:pointer;line-height:1}
   #busy{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;align-items:center;
     justify-content:center;gap:14px;background:rgba(6,12,10,.72);backdrop-filter:blur(1px)}
   #busy.hidden{display:none}   /* id > .hidden về specificity, phải override riêng */
@@ -90,32 +92,13 @@
 </header>
 <main>
 
-<details class="guide" open>
-  <summary>📖 Hướng dẫn — 6 bước từ PSD tới ảnh đổi tên hàng loạt</summary>
-  <div class="journey">
-    <div class="jstep"><div class="jnum">1</div>
-      <h3>Thả mẫu magnet</h3>
-      <p>Kéo <b>cả folder mẫu</b> (PSD + font đi kèm) vào ô, hoặc bấm <b>📁 Chọn folder</b> / <b>📄 Chọn file</b>. Tool tự đọc PSD, dò các layer chữ, font, màu, vị trí. <b>Làm 1 lần cho mỗi loại magnet.</b></p></div>
-    <div class="jstep"><div class="jnum">2</div>
-      <h3>Chọn phần cần đổi</h3>
-      <p>Bảng field hiện ra. <b>Bỏ tick</b> phần cố định (tiêu đề, tên tàu in sẵn); <b>giữ tick</b> phần khách đổi (tên, năm…). Cột <b>Cột (key)</b> là tên cột để nhập sau này.</p></div>
-    <div class="jstep"><div class="jnum">3</div>
-      <h3>Canh chỉnh trên preview</h3>
-      <p>Kéo <b>box</b> để dời, kéo <b>4 góc</b> để mở rộng (box rộng → tên dài đỡ bị co nhỏ). Chữ đặt trên cung (banner) tự dò độ cong — kéo <b>chấm vàng</b> để chỉnh cong cho khớp.</p></div>
-    <div class="jstep"><div class="jnum">4</div>
-      <h3>Lưu template</h3>
-      <p>Đặt <b>mã template</b> (vd <b>LTL132607A14</b>) rồi bấm <b>Lưu template</b>. Từ đây tái dùng mãi, không cần học lại. Trùng mã sẽ hỏi ghi đè.</p></div>
-    <div class="jstep"><div class="jnum">5</div>
-      <h3>Điền tên hàng loạt</h3>
-      <p>Xuống <b>mục 2</b>: chọn template (thấy ngay ảnh nền mẫu). Điền vào <b>bảng cột</b> — mỗi dòng 1 đơn. <b>Dán thẳng nhiều dòng từ Excel</b> vào bảng cũng được.</p></div>
-    <div class="jstep"><div class="jnum">6</div>
-      <h3>Render &amp; lấy ảnh</h3>
-      <p>Bấm <b>Render tất cả</b> → xem lưới preview → bấm <b>📂 Mở thư mục ảnh</b> để lấy file PNG (giữ đúng <b>DPI gốc</b> của PSD, vd 300). Không cần giải nén zip.</p></div>
-  </div>
-</details>
+<div class="tourbar">
+  <span>Lần đầu dùng? Xem hướng dẫn có badge chỉ vào từng chỗ.</span>
+  <button id="btnTour">▶ Hướng dẫn từng bước</button>
+</div>
 
 <!-- ============ 1. HỌC MẪU ============ -->
-<section>
+<section id="s1">
   <h2><span class="n">1</span>Học mẫu magnet (làm 1 lần / loại)</h2>
   <div id="drop" class="drop">Thả <b>folder mẫu</b> (hoặc file PSD + font) vào đây.<br>
     <span class="muted">Chỉ lấy .psd và font, tự bỏ qua ảnh/file khác.</span>
@@ -141,7 +124,7 @@
 </section>
 
 <!-- ============ 2. CHẠY BATCH ============ -->
-<section>
+<section id="s2">
   <h2><span class="n">2</span>Chạy đổi tên hàng loạt</h2>
   <div class="row">
     <label>Template: <select id="tplsel"></select></label>
@@ -167,6 +150,16 @@
 <div id="msg"></div>
 </main>
 <div id="busy" class="hidden"><div class="ring"></div><div class="t" id="busyT">Đang tải…</div></div>
+<div id="tour">
+  <div id="tourHole"></div>
+  <div id="tourTip">
+    <button id="tourClose" title="đóng">✕</button>
+    <h4 id="tourH"></h4><p id="tourP"></p>
+    <div class="nav"><span class="step" id="tourStep"></span>
+      <button id="tourPrev">← Trước</button>
+      <button id="tourNext" class="hot">Tiếp →</button></div>
+  </div>
+</div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -492,6 +485,54 @@ $("#btnOpen").onclick = async () => {
   const r=await fetch("/magnet/reveal?p="+encodeURIComponent(d));
   const j=await r.json(); if(j.error) msg(j.error, true);
 };
+
+// ---------- Hướng dẫn có badge chỉ vào từng chỗ (guided tour) ----------
+const TOUR = [
+  {sel:"#drop", h:"1. Thả mẫu magnet", p:"Kéo <b>folder PSD + font</b> vào đây, hoặc bấm <b>Chọn folder / Chọn file</b>. Tool tự đọc PSD, dò layer chữ + font + vị trí. Làm 1 lần mỗi loại."},
+  {sel:"#ftable", fb:"#s1", h:"2. Chọn phần cần đổi", p:"Bảng field hiện sau khi thả mẫu: <b>bỏ tick</b> phần cố định (tiêu đề), <b>giữ tick</b> phần khách đổi (tên, năm)."},
+  {sel:"#prevwrap", fb:"#s1", h:"3. Canh chỉnh trên preview", p:"Kéo <b>box</b> để dời/mở rộng (đỡ co chữ). Tên trên cung thì kéo <b>chấm vàng</b> chỉnh độ cong cho khớp."},
+  {sel:"#btnSave", fb:"#s1", h:"4. Lưu template", p:"Đặt <b>mã magnet</b> rồi bấm <b>Lưu template</b>. Tái dùng mãi, khỏi học lại."},
+  {sel:"#tplsel", h:"5. Chọn & điền tên", p:"Chọn template, điền vào <b>bảng cột</b> — mỗi dòng 1 đơn. <b>Dán nhiều dòng từ Excel</b> cũng được."},
+  {sel:"#btnRender", h:"6. Render & lấy ảnh", p:"Bấm <b>Render tất cả</b>, rồi <b>📂 Mở thư mục ảnh</b> để lấy PNG (giữ đúng <b>DPI gốc</b>). Xong!"},
+];
+let TI = 0;
+const vis = el => el && el.getClientRects().length > 0;
+function tgt(s){ let e=document.querySelector(s.sel); if(vis(e)) return e;
+  if(s.fb){ e=document.querySelector(s.fb); if(vis(e)) return e; } return null; }
+function showTour(i){
+  TI = (i + TOUR.length) % TOUR.length;
+  const s = TOUR[TI], el = tgt(s);
+  $("#tour").classList.add("on");
+  $("#tourH").innerHTML = s.h; $("#tourP").innerHTML = s.p;
+  $("#tourStep").textContent = `Bước ${TI+1}/${TOUR.length}`;
+  $("#tourNext").textContent = TI===TOUR.length-1 ? "Xong ✓" : "Tiếp →";
+  $("#tourPrev").style.visibility = TI ? "visible" : "hidden";
+  const hole=$("#tourHole"), tip=$("#tourTip");
+  if(el){ el.scrollIntoView({block:"center", behavior:"smooth"}); setTimeout(()=>place(el,hole,tip), 280); }
+  else{ hole.style.width="0"; hole.style.height="0";
+    tip.style.transform="translate(-50%,-50%)"; tip.style.left="50%"; tip.style.top="42%"; }
+}
+function place(el,hole,tip){
+  const r=el.getBoundingClientRect(), pad=6;
+  hole.style.left=(r.left-pad)+"px"; hole.style.top=(r.top-pad)+"px";
+  hole.style.width=(r.width+pad*2)+"px"; hole.style.height=(r.height+pad*2)+"px";
+  tip.style.transform="none";
+  const tw=tip.offsetWidth, th=tip.offsetHeight, gap=14;
+  let top=r.bottom+gap; if(top+th>innerHeight-8) top=Math.max(8, r.top-gap-th);
+  const left=Math.min(Math.max(8, r.left), innerWidth-tw-8);
+  tip.style.left=left+"px"; tip.style.top=top+"px";
+}
+function reposTour(){ if(!$("#tour").classList.contains("on")) return;
+  const el=tgt(TOUR[TI]); if(el) place(el,$("#tourHole"),$("#tourTip")); }
+function endTour(){ $("#tour").classList.remove("on"); try{localStorage.setItem("magnet_tour","1")}catch(e){} }
+$("#btnTour").onclick = () => showTour(0);
+$("#tourNext").onclick = () => TI===TOUR.length-1 ? endTour() : showTour(TI+1);
+$("#tourPrev").onclick = () => showTour(TI-1);
+$("#tourClose").onclick = endTour;
+$("#tour").addEventListener("click", e => { if(e.target.id==="tour") endTour(); });
+window.addEventListener("resize", reposTour);
+window.addEventListener("scroll", reposTour, true);
+try{ if(!localStorage.getItem("magnet_tour")) setTimeout(()=>showTour(0), 600); }catch(e){}
 
 loadTemplates();
 </script>
