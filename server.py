@@ -388,6 +388,7 @@ async def magnet_csv(request):
 async def magnet_render(request):
     body = await request.json()
     slug, rows = body.get("slug", ""), body.get("rows") or []
+    fmts = [f for f in (body.get("fmts") or ["png", "jpg"]) if f in ("png", "jpg")] or ["png", "jpg"]
     if not magnet.load_template(slug, DATA):
         return web.json_response({"error": "template không tồn tại"}, status=404)
     if not rows:
@@ -395,15 +396,10 @@ async def magnet_render(request):
     rid = time.strftime("%Y%m%d-%H%M%S")
     outdir = MAGNET_RUNS / slug / rid
     try:
-        paths = magnet.render_rows(slug, rows, DATA, outdir)
+        paths = magnet.render_rows(slug, rows, DATA, outdir, fmts)
     except Exception as e:
         return web.json_response({"error": f"render lỗi: {e}"}, status=400)
-    imgs = []
-    from PIL import Image
-    for p in paths:                                 # thumb nhẹ cho lưới preview
-        th = p.with_suffix(".thumb.jpg")
-        im = Image.open(p).convert("RGB"); im.thumbnail((420, 420)); im.save(th, quality=85)
-        imgs.append({"name": p.stem, "thumb": _magnet_url(th), "full": _magnet_url(p)})
+    imgs = [{"name": p.stem, "full": _magnet_url(p)} for p in paths]   # bỏ thumb, preview = ảnh thật
     return web.json_response({"run": rid, "images": imgs, "dir": str(outdir)})
 
 async def magnet_reveal(request):

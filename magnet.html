@@ -58,6 +58,7 @@
   .cell .cap{color:#1a1200;font-size:11px;margin-top:4px}
   .sw{display:inline-block;width:16px;height:16px;border-radius:3px;border:1px solid var(--line);vertical-align:middle;margin-right:5px}
   #entry input.nm{width:100%}
+  #entry td.stt{text-align:center;color:var(--muted);font-size:12px;width:40px}
   .cwrap{display:flex;gap:4px;align-items:center;margin-top:4px}
   .cwrap .cw{width:24px;height:24px;padding:0;border:1px solid var(--line);border-radius:5px;background:none;cursor:pointer;flex:0 0 auto}
   .cwrap .cx{width:74px;padding:4px 5px;font-size:11px}
@@ -159,6 +160,9 @@
   <div class="row" style="margin-top:10px">
     <button id="btnAddRow">+ dòng</button>
     <button id="btnClear">Xoá hết</button>
+    <span class="muted" style="margin-left:6px">Xuất:</span>
+    <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="fmtPng" checked> PNG</label>
+    <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="fmtJpg" checked> JPG</label>
     <button id="btnRender" class="hot">Render tất cả</button>
     <button id="btnOpen" class="hidden">📂 Mở thư mục ảnh</button>
   </div>
@@ -464,10 +468,10 @@ function rgbHex(a){ return "#"+a.map(x=>Math.max(0,Math.min(255,x|0)).toString(1
 function curBg(){ const t=TEMPLATES.find(t=>t.slug===$("#tplsel").value); return t && t.bg ? t.bg : null; }
 function renderEntry(){
   const C = cols(), t = $("#entry"), bg = curBg();     // bg = màu nền gốc [r,g,b] hoặc null
-  t.innerHTML = "<tr>" + C.map(c=>`<th>${c}</th>`).join("") + (bg?"<th>nền</th>":"") + "<th></th></tr>";
+  t.innerHTML = "<tr><th>stt</th>" + C.map(c=>`<th>${c}</th>`).join("") + (bg?"<th>nền</th>":"") + "<th></th></tr>";
   ROWS.forEach((row,i)=>{
     const tr = document.createElement("tr");
-    let html = C.map(c=>{
+    let html = `<td class="stt">${i+1}</td>` + C.map(c=>{     // stt tự động điền, không sửa
       const v = (row[c]||"").replace(/"/g,'&quot;');
       if(c==="order") return `<td><input class="nm" data-i="${i}" data-c="${c}" value="${v}"></td>`;
       const hx = (row["__c_"+c]||"");                       // rỗng = giữ màu gốc PSD
@@ -570,19 +574,21 @@ $("#btnDelete").onclick = async () => {
 $("#btnRender").onclick = async () => {
   const slug = $("#tplsel").value;
   const rows = ROWS.filter(r=>curFields().some(k=>(r[k]||"").trim()));   // bỏ dòng trống
+  const fmts=[]; if($("#fmtPng").checked) fmts.push("png"); if($("#fmtJpg").checked) fmts.push("jpg");
   if(!slug){ msg("Chọn template.", true); return; }
   if(!rows.length){ msg("Điền ít nhất 1 dòng.", true); return; }
+  if(!fmts.length){ msg("Chọn ít nhất 1 định dạng (PNG/JPG).", true); return; }
   busy(true, `Đang render ${rows.length} ảnh…`); msg(`Đang render ${rows.length} ảnh…`);
   $("#btnRender").disabled=true;
   try{
     const r = await fetch("/magnet/render",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({slug, rows})});
+      body:JSON.stringify({slug, rows, fmts})});
     const j = await r.json();
     if(j.error){ msg(j.error, true); return; }
     const g = $("#grid"); g.innerHTML="";
     j.images.forEach(im=>{
       const c=document.createElement("div"); c.className="cell";
-      c.innerHTML=`<a href="${im.full}" target="_blank"><img src="${im.thumb}"></a><div class="cap">${im.name}</div>`;
+      c.innerHTML=`<a href="${im.full}" target="_blank"><img src="${im.full}" loading="lazy"></a><div class="cap">${im.name}</div>`;
       g.appendChild(c);
     });
     const ob=$("#btnOpen"); ob.dataset.dir=j.dir||""; ob.classList.toggle("hidden", !j.dir);

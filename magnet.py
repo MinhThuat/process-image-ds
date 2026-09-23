@@ -298,6 +298,8 @@ def analyze(psd_path):
             "color": list(color), "justify": just,
             "box": box, "size_px": size_px, "top_frac": round(top_frac, 4),
             "arc": arc, "track": track, "hscale": round(hscale, 4), "effects": _effects(l),
+            "clip_layers": _clip_names(l),          # pattern mask vào chữ (nếu có)
+            "pattern": bool(_clip_names(l)),         # cờ cho UI + save; save đổi thành tên file texture
         })
     preview = psd.composite()
     bg_name, bg_color = _bg_layer(psd)                    # nền màu đơn đổi được (nếu có)
@@ -330,14 +332,76 @@ def _bg_layer(psd):
     return None, None
 
 
-# ---------- build base (ẩn field + nền) ----------
-def _build_base(psd_path, layer_names, bg_name=None):
+# ---------- pattern "mask vào text" (clipping mask trong PSD) ----------
+def _clip_names(layer):
+    """Tên các layer đang clip (mask) vào layer này -> đó là pattern/texture phủ trong chữ."""
+    return [str(c.name) for c in getattr(layer, "clip_layers", []) or []]
+
+
+def _inpaint(patch):
+    """patch RGBA (pattern∩chữ, có lỗ giữa nét) -> texture RGB KÍN bằng lan màu (watercolor mượt)."""
+    rgb = patch[..., :3]; known = patch[..., 3] > 76      # ~0.3*255
+    if known.sum() < 10:
+        return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+    imgf = Image.fromarray(np.where(known[..., None], rgb, 0).astype(np.uint8))
+    wf = Image.fromarray((known * 255).astype(np.uint8))
+    for _ in range(40):                                   # lặp: blur rồi giữ pixel gốc -> lấp dần lỗ
+        ib = np.asarray(imgf.filter(ImageFilter.GaussianBlur(6))).astype(np.float32)
+        wb = np.asarray(wf.filter(ImageFilter.GaussianBlur(6))).astype(np.float32) / 255.0
+        filled = ib / np.maximum(wb[..., None], 1e-3)
+        filled[known] = rgb[known]
+        imgf = Image.fromarray(np.clip(filled, 0, 255).astype(np.uint8))
+        wf = Image.fromarray((np.clip(wb + 0.5, 0, 1) * 255).astype(np.uint8))
+    return imgf
+
+
+def _extract_pattern(psd_path, text_name, clip_names, bbox):
+    """Composite chỉ text+clip -> pattern∩chữ, cắt theo bbox chữ, lấp lỗ -> texture RGB để tô tên mới."""
+    psd = PSDImage.open(str(psd_path))
+    keep = {text_name, *clip_names}
+    for l in psd.descendants():
+        l.visible = l.name in keep
+    arr = np.asarray(psd.composite(force=True).convert("RGBA"))
+    x0, y0, x1, y1 = [int(v) for v in bbox]
+    return _inpaint(arr[y0:y1, x0:x1].astype(np.float32))
+
+
+# ---------- build base (ẩn field + nền + layer clip pattern) ----------
+def _build_base(psd_path, layer_names, bg_name=None, extra_hide=None):
     psd = PSDImage.open(str(psd_path))
     want = set(layer_names)
+    extra = set(extra_hide or [])
     for l in psd.descendants():
-        if (l.kind == "type" and l.name in want) or (bg_name and l.name == bg_name):
-            l.visible = False                       # nền ẩn -> base trong suốt chỗ nền, tô lại lúc render
+        if (l.kind == "type" and l.name in want) or (bg_name and l.name == bg_name) or (l.name in extra):
+            l.visible = False                       # ẩn -> base trong suốt chỗ đó, vẽ/tô lại lúc render
     return psd.composite(force=True).convert("RGBA")
+
+
+def _bake_bases(psd_path, exclude_names, bg_name=None):
+    """Tách base theo z-order: (dưới-chữ, trên-chữ). Layer NẰM TRÊN chữ (art đè lên) tách ra
+    base_above để dán LẠI sau khi vẽ chữ -> giữ đúng thứ tự (chữ không che art). above=None nếu không có."""
+    excl = set(exclude_names)
+    layers = list(PSDImage.open(str(psd_path)).descendants())
+    cutoff = max([i for i, l in enumerate(layers) if l.name in excl], default=len(layers) - 1)
+    has_above = any(i > cutoff for i in range(len(layers)))
+    keep = lambda l: l.name not in excl and not (bg_name and l.name == bg_name)
+    def bake(pred):
+        psd = PSDImage.open(str(psd_path)); ls = list(psd.descendants())
+        for i, l in enumerate(ls):
+            l.visible = pred(i, l)
+        return psd.composite(force=True).convert("RGBA")
+    above = None
+    if has_above:
+        try:
+            a = bake(lambda i, l: i > cutoff)
+            above = a if a.getbbox() else None
+        except Exception:
+            above = None                            # composite lỗi -> không tách, gộp vào below (không mất art)
+    if above is not None:
+        below = bake(lambda i, l: i <= cutoff and keep(l))   # dưới-chữ (art trên đã tách ra above)
+    else:
+        below = bake(lambda i, l: keep(l))                   # như cũ: gộp tất cả trừ chữ/nền
+    return below, above
 
 
 # ---------- save template ----------
@@ -355,7 +419,9 @@ def save_template(psd_path, slug, fields, data_dir):
     (tdir / "fonts").mkdir(parents=True, exist_ok=True)
     dpi = _dpi(PSDImage.open(str(psd_path)))
     bg_name, bg_color = _bg_layer(PSDImage.open(str(psd_path)))   # nền màu đơn (nếu có)
-    base = _build_base(psd_path, [f["layer"] for f in fields], bg_name)
+    clip_hide = [c for f in fields for c in f.get("clip_layers", [])]   # layer pattern -> ẩn khỏi base
+    exclude = [f["layer"] for f in fields] + clip_hide
+    base, base_above = _bake_bases(psd_path, exclude, bg_name)           # tách z-order: dưới/trên chữ
     base.save(tdir / "base.png", dpi=(dpi, dpi))
     src_folder = psd_path.parent
     saved = []
@@ -368,11 +434,20 @@ def save_template(psd_path, slug, fields, data_dir):
         if src and src.is_file():
             shutil.copy2(src, tdir / "fonts" / src.name)
             fn = src.name
-        saved.append({**f, "font_file": fn})
+        sf = {**f, "font_file": fn}
+        if f.get("pattern") and f.get("clip_layers"):   # trích texture pattern -> lưu PNG, tô lúc render
+            tex = _extract_pattern(psd_path, f["layer"], f["clip_layers"], f["box"])
+            pfn = f"pattern_{_slug(f['key'])}.png"
+            tex.save(tdir / pfn)
+            sf["pattern"] = pfn
+        saved.append(sf)
     tpl = {"slug": slug, "canvas": list(PSDImage.open(str(psd_path)).size),
            "dpi": dpi, "base": "base.png", "fields": saved}
     if bg_name:
         tpl["background"] = {"layer": bg_name, "color": bg_color}   # tô lại lúc render, mặc định = màu gốc
+    if base_above is not None:
+        base_above.save(tdir / "base_above.png", dpi=(dpi, dpi))
+        tpl["base_above"] = "base_above.png"                        # art nằm trên chữ -> dán sau khi vẽ chữ
     (tdir / "template.json").write_text(json.dumps(tpl, ensure_ascii=False, indent=2), encoding="utf-8")
     return tpl
 
@@ -511,6 +586,11 @@ def _draw_field_raw(img, f, tdir, value, override=None):
     anchor = {"left": "l", "right": "r", "center": "m"}[just] + "s"   # +baseline
     baseline = y0 + f["top_frac"] * size
     grad, bev, glow, insh = fx.get("gradient"), fx.get("bevel"), fx.get("glow"), fx.get("inner_shadow")
+    pat_img = None                                  # texture "pattern mask vào text" (clip mask trong PSD)
+    if f.get("pattern") and not oc:
+        pp = tdir / f["pattern"]
+        if pp.is_file():
+            pat_img = Image.open(pp).convert("RGBA")
     if oc:                                          # ép màu chữ đặc theo mã nhập; giữ viền/bóng/glow
         grad = bev = insh = None
 
@@ -542,7 +622,7 @@ def _draw_field_raw(img, f, tdir, value, override=None):
         img.alpha_composite(lay)
 
     # ---- fast-path: fill đặc, không effect fill đặc biệt -> vẽ 1 lệnh (như cũ, đã kiểm) ----
-    if not (grad or bev or insh):
+    if not (grad or bev or insh or pat_img):
         _draw_tracked(ImageDraw.Draw(img), ax, baseline, value, font, fill, anchor[0],
                       track_px, sw, scol)
         return
@@ -557,16 +637,23 @@ def _draw_field_raw(img, f, tdir, value, override=None):
         _draw_tracked(ImageDraw.Draw(st), ax, baseline, value, font, (0, 0, 0, 0),
                       anchor[0], track_px, sw, scol)
         img.alpha_composite(st)
-    # 4. fill: bevel > gradient > solid
-    if bev:
-        rgb = _bevel_fill(amask, bev)
-    elif grad:
-        rgb = _grad_fill(img.size, bbox, grad)
-    else:
-        rgb = None
-    if rgb is not None:
-        fi = Image.fromarray(rgb, "RGB").convert("RGBA"); fi.putalpha(amask)
+    # 4. fill: pattern > bevel > gradient > solid
+    if pat_img is not None and bbox:               # trải texture lên bbox chữ mới, clip theo alpha chữ
+        pat = pat_img.resize((bbox[2] - bbox[0], bbox[3] - bbox[1]))
+        fi = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        fi.paste(pat, (bbox[0], bbox[1]))
+        fi.putalpha(amask)
         img.alpha_composite(fi)
+    else:
+        if bev:
+            rgb = _bevel_fill(amask, bev)
+        elif grad:
+            rgb = _grad_fill(img.size, bbox, grad)
+        else:
+            rgb = None
+        if rgb is not None:
+            fi = Image.fromarray(rgb, "RGB").convert("RGBA"); fi.putalpha(amask)
+            img.alpha_composite(fi)
     # 5. inner shadow (bóng tối bên trong chữ)
     if insh:
         ic = _rgba(insh["color"])
@@ -665,11 +752,14 @@ def render_one(tpl, tdir, values):
         v = values.get(f["key"], "")
         if v != "":
             _draw_field(img, f, tdir, str(v), values.get("__c_" + f["key"]))
+    if tpl.get("base_above"):                        # art nằm TRÊN chữ -> dán đè lại, giữ đúng z-order
+        img.alpha_composite(Image.open(tdir / tpl["base_above"]).convert("RGBA"))
     return img
 
 
-def render_rows(slug, rows, data_dir, out_dir):
-    """rows: list[dict] (mỗi dict 1 đơn, có key field + 'order'). Trả list path PNG."""
+def render_rows(slug, rows, data_dir, out_dir, fmts=("png", "jpg")):
+    """rows: list[dict] (mỗi dict 1 đơn, có key field + 'order'). fmts: định dạng xuất ('png'/'jpg').
+    Chỉ lưu định dạng được chọn. Trả list path ĐẠI DIỆN mỗi đơn (để preview)."""
     tpl = load_template(slug, data_dir)
     if not tpl:
         raise ValueError(f"template không tồn tại: {slug}")
@@ -677,16 +767,20 @@ def render_rows(slug, rows, data_dir, out_dir):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     dpi = tpl.get("dpi", 72)
-    paths = []
+    fmts = [f for f in ("png", "jpg") if f in fmts] or ["png"]   # ít nhất 1 định dạng
+    outs = []
     for i, row in enumerate(rows, 1):
         safe = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", str(row.get("order") or "")).strip() or "don"
         img = render_one(tpl, tdir, row)
-        p = out_dir / f"{i:03d}_{safe}.png"             # prefix index -> không đè nhau
-        img.save(p, dpi=(dpi, dpi))                     # giữ DPI gốc của PSD (vd 300)
-        img.convert("RGB").save(p.with_suffix(".jpg"),  # xuất kèm JPG (nền trắng)
-                                quality=95, dpi=(dpi, dpi))
-        paths.append(p)
-    return paths
+        stem = f"{i:03d}_{safe}"                          # prefix index -> không đè nhau
+        made = []
+        if "png" in fmts:
+            pp = out_dir / f"{stem}.png"; img.save(pp, dpi=(dpi, dpi)); made.append(pp)
+        if "jpg" in fmts:
+            jp = out_dir / f"{stem}.jpg"
+            img.convert("RGB").save(jp, quality=95, dpi=(dpi, dpi)); made.append(jp)
+        outs.append(made[0])                             # ưu tiên PNG cho preview nếu có
+    return outs
 
 
 def zip_paths(paths, zip_path):
