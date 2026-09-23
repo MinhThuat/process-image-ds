@@ -118,14 +118,12 @@
 <!-- ============ 1. HỌC MẪU ============ -->
 <section id="s1">
   <h2><span class="n">1</span>Học mẫu Custom (làm 1 lần / loại)</h2>
-  <div id="drop" class="drop">Thả <b>folder mẫu</b> (hoặc file PSD + font) vào đây.<br>
+  <div id="drop" class="drop">Thả <b>folder mẫu</b> (PSD + font) vào đây.<br>
     <span class="muted">Chỉ lấy .psd và font, tự bỏ qua ảnh/file khác.</span>
     <div class="row" style="justify-content:center;margin-top:12px">
       <button type="button" id="pickFolder">📁 Chọn folder</button>
-      <button type="button" id="pickFiles">📄 Chọn file</button>
     </div>
     <input id="inpFolder" type="file" webkitdirectory multiple class="hidden">
-    <input id="inpFiles" type="file" multiple accept=".psd,.ttf,.otf,.ttc,.PSD,.TTF,.OTF" class="hidden">
   </div>
   <div id="learnResult" class="hidden">
     <div class="row" style="margin-top:12px">
@@ -194,9 +192,7 @@ const EXT = /\.(psd|ttf|otf|ttc)$/i;
 const keep = files => [...files].filter(f => EXT.test(f.name));   // chỉ PSD + font
 
 $("#pickFolder").onclick = () => $("#inpFolder").click();
-$("#pickFiles").onclick = () => $("#inpFiles").click();
 $("#inpFolder").onchange = e => learn(keep(e.target.files));
-$("#inpFiles").onchange = e => learn(keep(e.target.files));
 
 ["dragover","dragenter"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add("hi")}));
 drop.addEventListener("dragleave",ev=>{ev.preventDefault();drop.classList.remove("hi")});
@@ -602,7 +598,7 @@ $("#btnOpen").onclick = async () => {
 
 // ---------- Hướng dẫn có badge chỉ vào từng chỗ (guided tour) ----------
 const TOUR = [
-  {sel:"#drop", gate:1, h:"1. Thả mẫu Custom", p:"Kéo <b>folder PSD + font</b> (hoặc 1 file PSD) vào ô đang sáng, hoặc bấm <b>Chọn folder / Chọn file</b>. <b>Thả xong hướng dẫn tự sang bước 2</b> để chỉ vào từng chỗ trên chính mẫu của bạn."},
+  {sel:"#drop", gate:1, h:"1. Thả mẫu Custom", p:"Kéo <b>folder PSD + font</b> vào ô đang sáng, hoặc bấm <b>Chọn folder</b>. <b>Thả xong hướng dẫn tự sang bước 2</b> để chỉ vào từng chỗ trên chính mẫu của bạn."},
   {sel:"#ftable", fb:"#s1", req:1, h:"2. Chọn phần cần đổi", p:"Bảng field: <b>bỏ tick</b> phần cố định (tiêu đề), <b>giữ tick</b> phần khách đổi (tên, năm)."},
   {sel:"#prevwrap", fb:"#s1", req:1, h:"3. Canh chỉnh trên preview", p:"Kéo <b>box</b> để dời/mở rộng (đỡ co chữ). Tên trên cung thì kéo <b>chấm vàng</b> chỉnh độ cong cho khớp."},
   {sel:"#btnSave", fb:"#s1", req:1, h:"4. Lưu template", p:"Đặt <b>mã Custom</b> rồi bấm <b>Lưu template</b>. Tái dùng mãi, khỏi học lại."},

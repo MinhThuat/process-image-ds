@@ -64,14 +64,14 @@ def _resolve_font(psd_name, folder: Path):
             best, score = p, s
     if best:
         return best
-    return files[0] if len(files) == 1 else None   # 1 font duy nhất -> chắc là nó
+    return None   # tên không khớp font nào -> báo thiếu (KHÔNG thay đại font khác: hình chữ sẽ sai)
 
 
 # ---------- đọc style layer text ----------
 def _style(layer):
     """(font_name, size_pt, color_rgba, justify, tracking) từ engine_dict; mặc định nếu thiếu.
     tracking = giãn cách chữ theo PS (đơn vị 1/1000 em) — Pillow không tự áp nên phải đọc ra."""
-    font_name, size_pt, color, just, track = "", None, (0, 0, 0, 255), "center", 0.0
+    font_name, size_pt, color, just, track, hscale = "", None, (0, 0, 0, 255), "center", 0.0, 1.0
     try:
         ed = layer.engine_dict
         sd = ed["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
@@ -79,6 +79,7 @@ def _style(layer):
         font_name = str(fonts[sd.get("Font", 0)]["Name"])
         size_pt = float(sd.get("FontSize", 0)) or None
         track = float(sd.get("Tracking", 0) or 0)
+        hscale = float(sd.get("HorizontalScale", 1) or 1)   # nén/giãn ngang (PS), 0.9 = 90%
         v = sd.get("FillColor", {}).get("Values")     # [A,R,G,B] 0..1
         if v and len(v) == 4:
             color = (round(v[1] * 255), round(v[2] * 255), round(v[3] * 255), round(v[0] * 255))
@@ -89,7 +90,7 @@ def _style(layer):
         just = JUSTIFY.get(int(j), "center")
     except Exception:
         pass
-    return font_name, size_pt, color, just, track
+    return font_name, size_pt, color, just, track, hscale
 
 
 def _calibrate(font_file: Path, text, box):
@@ -165,10 +166,12 @@ def _effects(layer):
                 out["fill"] = list(c)                      # đè màu chữ
         elif n == "Stroke" and float(e.size) > 0:
             c = _color(e.color)
-            if c:
-                # PS "outside" ~ gấp đôi bề rộng Pillow (Pillow vẽ stroke giữa nét)
-                mul = 2 if e.position == b"OutF" else 1
-                out["stroke"] = round(float(e.size) * mul)
+            # PS Stroke Size = px lan ra theo Position; Pillow stroke_width vẽ ra NGOÀI đúng số px đó:
+            #   Outside -> =Size | Center -> =Size/2 (chỉ nửa lan ngoài) | Inside -> ~0 (lan vào trong).
+            mul = {b"OutF": 1.0, b"CtrF": 0.5, b"InsF": 0.0}.get(e.position, 1.0)
+            sw = round(float(e.size) * mul)
+            if c and sw > 0:
+                out["stroke"] = sw
                 out["stroke_color"] = list(c)
         elif n == "DropShadow":
             c = _color(e.color)
@@ -277,7 +280,7 @@ def analyze(psd_path):
     fields = []
     used = set()
     for l in _type_layers(psd):
-        font_name, _size_pt, color, just, track = _style(l)
+        font_name, _size_pt, color, just, track, hscale = _style(l)
         ff = _resolve_font(font_name, folder)
         box = list(l.bbox)
         txt = str(l.text)
@@ -294,7 +297,7 @@ def analyze(psd_path):
             "font_file": ff.name if ff else "",
             "color": list(color), "justify": just,
             "box": box, "size_px": size_px, "top_frac": round(top_frac, 4),
-            "arc": arc, "track": track, "effects": _effects(l),
+            "arc": arc, "track": track, "hscale": round(hscale, 4), "effects": _effects(l),
         })
     preview = psd.composite()
     bg_name, bg_color = _bg_layer(psd)                    # nền màu đơn đổi được (nếu có)
@@ -449,16 +452,50 @@ def _draw_tracked(draw, ax, baseline, value, font, fill, ha, track_px, sw=0, sco
                   stroke_width=sw, stroke_fill=scol)
 
 
+def _hsqueeze(layer, cx, s):
+    """Nén ngang cả lớp theo hệ số s quanh trục x=cx (giữ nguyên chiều cao)."""
+    W, H = layer.size
+    sc = layer.resize((max(1, int(round(W * s))), H), Image.LANCZOS)
+    out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    out.paste(sc, (int(round(cx - cx * s)), 0))         # điểm cx giữ nguyên vị trí
+    return out
+
+
 def _draw_field(img, f, tdir, value, override=None):
+    """Bọc quanh _draw_field_raw: nếu PSD nén ngang (HorizontalScale != 1) thì vẽ ở box nới
+    rộng 1/hs rồi nén lại đúng hs -> chữ giữ đúng chiều cao thiết kế, không bị auto-shrink cả 2 chiều."""
+    hs = float(f.get("hscale") or 1.0)
+    if abs(hs - 1.0) < 1e-3:
+        _draw_field_raw(img, f, tdir, value, override)
+        return
+    x0, y0, x1, y1 = f["box"]
+    cx = (x0 + x1) / 2
+    half = (x1 - x0) / (2 * hs)
+    f2 = {**f, "box": [cx - half, y0, cx + half, y1]}   # nới box ngang 1/hs để bù phần nén
+    work = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    _draw_field_raw(work, f2, tdir, value, override)
+    img.alpha_composite(_hsqueeze(work, cx, hs))
+
+
+def _draw_field_raw(img, f, tdir, value, override=None):
     x0, y0, x1, y1 = f["box"]
     box_w = max(1, x1 - x0)
     fpath = tdir / "fonts" / f["font_file"]
     track = float(f.get("track") or 0)              # 1/1000 em (PS tracking)
     size = int(f["size_px"])
     font = ImageFont.truetype(str(fpath), size)
-    _, w = _layout(font, value, track / 1000.0 * size)
-    if w > box_w:                                   # auto-shrink cho vừa bề ngang (kể cả tracking)
-        size = max(4, int(size * box_w / w))
+    tp = track / 1000.0 * size
+    _, w = _layout(font, value, tp)                 # bề rộng chữ MỚI ở cỡ thiết kế
+    # trust-size: giới hạn = max(box, bề rộng chữ GỐC đo cùng font). Đo chữ gốc cùng font để khử
+    # độ rộng dư khi font kèm khác bản gốc -> chữ cùng độ dài giữ đúng cỡ + khe; chỉ shrink khi
+    # chữ mới rộng hơn cả hai. Font đúng: w_orig<=box -> limit=box (y hệt cũ).
+    orig = str(f.get("text") or "")
+    limit = box_w
+    if orig:
+        _, w_orig = _layout(font, orig, tp)
+        limit = max(box_w, w_orig)
+    if w > limit:                                   # auto-shrink cho vừa (kể cả tracking)
+        size = max(4, int(size * limit / w))
         font = ImageFont.truetype(str(fpath), size)
     track_px = track / 1000.0 * size
     oc = _hex(override)                             # mã màu người dùng nhập (rỗng -> giữ màu PSD)
