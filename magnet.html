@@ -158,6 +158,7 @@
   <p class="muted" style="margin:10px 0 4px">Điền tên theo cột (dán nhiều dòng từ Excel vào bảng cũng được):</p>
   <div style="overflow:auto"><table id="entry"></table></div>
   <div class="row" style="margin-top:10px">
+    <input type="number" id="addQty" value="1" min="1" style="width:60px" title="số dòng muốn thêm">
     <button id="btnAddRow">+ dòng</button>
     <button id="btnClear">Xoá hết</button>
     <span class="muted" style="margin-left:6px">Xuất:</span>
@@ -566,7 +567,11 @@ $("#entry").addEventListener("paste", e=>{
 
 $("#tplsel").onchange = () => { renderEntry(); showBase(); };
 $("#btnReload").onclick = () => loadTemplates($("#tplsel").value);
-$("#btnAddRow").onclick = () => { ROWS.push({}); renderEntry(); };
+$("#btnAddRow").onclick = () => {
+  const n = Math.max(1, parseInt($("#addQty").value) || 1);   // mặc định 1
+  for(let k=0;k<n;k++) ROWS.push({});
+  renderEntry();
+};
 $("#btnClear").onclick = () => { ROWS = [{}]; renderEntry(); };
 
 $("#btnRename").onclick = async () => {
