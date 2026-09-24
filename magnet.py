@@ -253,9 +253,9 @@ def _detect_arc(layer):
             x0, _y0, x1, _y1 = layer.bbox
             width = max(1, x1 - x0)
             if b"Arc" in enum:                      # warpArc / warpArch / warpArcUpper|Lower
-                # bend% -> sagitta parabol px. Hiệu chỉnh theo RENDER khớp mẫu PS (bend 32, width
-                # 2576 -> ~420): pixel-detect under-đọc vì đáy glyph xoay bị kéo lên, nên factor cao hơn.
-                return float(round(0.51 * bend / 100.0 * width)) if abs(bend) >= 1 else 0.0
+                # bend% -> sagitta parabol px (dùng cùng cỡ chữ thiết kế thật -> khớp mẫu; bend 32,
+                # width 2576 -> ~340, xấp xỉ box_h - cap_height).
+                return float(round(0.412 * bend / 100.0 * width)) if abs(bend) >= 1 else 0.0
             if enum not in (b"warpNone", b""):
                 return 0.0                          # warp kiểu khác (wave/flag...) -> coi thẳng, né parabol sai
     except Exception:
@@ -289,6 +289,18 @@ def _dpi(psd):
         return 72
 
 
+def _design_size(layer):
+    """Cỡ chữ THẬT theo thiết kế (px canvas) = FontSize(engine) * scale của transform layer.
+    Ổn định, không phụ thuộc arc/box; 0 nếu thiếu."""
+    try:
+        sd = layer.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
+        fs = float(sd.get("FontSize", 0))
+        tr = layer.transform
+        return fs * math.hypot(tr[2], tr[3])
+    except Exception:
+        return 0.0
+
+
 def _type_layers(psd):
     """Các layer text ĐANG HIỆN (bỏ layer ẩn/biến thể không dùng)."""
     out = []
@@ -312,8 +324,14 @@ def analyze(psd_path):
         box = list(l.bbox)
         txt = str(l.text)
         arc = _detect_arc(l)                          # tên cong (banner) -> sagitta px
-        cal_box = [box[0], box[1], box[2], box[3] - int(abs(arc))]   # bỏ phần cong khi tính cỡ chữ
-        size_px, top_frac = _calibrate(ff, txt, cal_box) if ff else (max(1, cal_box[3] - cal_box[1]), 0.8)
+        ds = _design_size(l) if (arc and ff) else 0   # chữ cong: lấy cỡ THẬT từ warp transform (không trừ arc)
+        if ds >= 4:
+            size_px = int(round(ds))
+            top = -ImageFont.truetype(str(ff), size_px).getbbox(txt or "Ag", anchor="ls")[1]
+            top_frac = top / size_px
+        else:
+            cal_box = [box[0], box[1], box[2], box[3] - int(abs(arc))]   # (không có warp) bỏ phần cong khi tính cỡ
+            size_px, top_frac = _calibrate(ff, txt, cal_box) if ff else (max(1, cal_box[3] - cal_box[1]), 0.8)
         key = re.sub(r"[^a-z0-9]+", "_", str(l.name or "field").lower()).strip("_") or "field"
         while key in used:
             key += "_2"
