@@ -12,6 +12,27 @@ import magnet as m
 _ARC_LIKE = {"warpArc", "warpArcUpper", "warpArcLower"}
 
 
+# Thông số text tool BỎ QUA -> flag nếu ≠ mặc định (xem PSD-CHECKLIST.md §1b)
+def _risky_style(sd):
+    out = []
+    caps = int(sd.get("FontCaps", 0) or 0)
+    if caps:
+        out.append(f"FontCaps={caps} ({'ALL-CAPS' if caps == 2 else 'small-caps'}) -> tool KHÔNG viết hoa")
+    if sd.get("FauxBold"):
+        out.append("FauxBold (giả đậm) bị bỏ")
+    if sd.get("FauxItalic"):
+        out.append("FauxItalic (giả nghiêng) bị bỏ")
+    if abs(float(sd.get("VerticalScale", 1) or 1) - 1) > 1e-3:
+        out.append(f"VerticalScale={sd['VerticalScale']} không áp vào vẽ")
+    if abs(float(sd.get("BaselineShift", 0) or 0)) > 1e-3:
+        out.append(f"BaselineShift={sd['BaselineShift']} bị bỏ")
+    if sd.get("Underline"):
+        out.append("Underline bị bỏ")
+    if sd.get("Strikethrough"):
+        out.append("Strikethrough bị bỏ")
+    return out
+
+
 def _warp_status(style):
     if style == "warpNone":
         return "✅ thẳng"
@@ -46,6 +67,12 @@ def main(path):
         print(f"  font={font!r}  design_size={m._design_size(l):.1f}px  "
               f"FillColor={color}  justify={just}")
         print(f"  Tracking={track}  HorizontalScale={hscale}")
+        if l.opacity != 255 or str(l.blend_mode) != "BlendMode.NORMAL" or l.has_mask():
+            print(f"  ⚠ layer: opacity={l.opacity} blend={l.blend_mode} "
+                  f"mask={l.has_mask()} -> tool coi như normal/đục")
+        sd = l.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
+        for r in _risky_style(sd):
+            print(f"  ⚠ THÔNG SỐ BỊ BỎ (báo user!): {r}")
         # effect nào có
         keys = [k for k in ("fill", "strokes", "shadow", "inner_shadow",
                             "gradient", "glow", "bevel") if fx.get(k)]

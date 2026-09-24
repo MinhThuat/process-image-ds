@@ -294,8 +294,10 @@ def _detect_arc(layer):
             bend = float(wp.get(b"warpValue", 0) or 0)
             x0, _y0, x1, _y1 = layer.bbox
             width = max(1, x1 - x0)
-            if enum == b"warpNone" or (enum and not bend):
-                return 0.0                          # explicit straight text: no pixel heuristic
+            if enum and enum != b"warpNone" and not bend:
+                return 0.0                          # warp THẬT nhưng bend=0 = thẳng (deterministic)
+            # warpNone: KHÔNG return sớm -> chữ cong có thể nướng sẵn/uốn tay vào pixel
+            # (mẫu LTL banner) -> thả xuống pixel-fallback (có guard sag>=25 né descender giả).
             if enum == b"warpArch":
                 geometry = _text_geometry(layer)
                 if _supports_arch(geometry):

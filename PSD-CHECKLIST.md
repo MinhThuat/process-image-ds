@@ -19,6 +19,23 @@ gặp ô ⚠ (chưa hỗ trợ / lệch) thì báo user trước, không tự b�
 - [ ] **FillColor** (màu chữ gốc).
 - [ ] **Justification** (căn trái/giữa/phải).
 
+### 1b. Thông số text tool đang BỎ QUA — soi, nếu ≠ mặc định thì BÁO user
+`StyleSheetData` có 27 key; tool chỉ áp 6 cái trên. Các key dưới **tool không
+dựng** — mẫu nào bật là ra sai, phải cảnh báo (inspect_psd.py tự flag):
+
+| key | mặc định | bật lên = | mức |
+|-----|----------|-----------|-----|
+| **FontCaps** | 0 | 1=small-caps, 2=ALL-CAPS → phải viết HOA input | CAO |
+| **FauxBold** | false | giả đậm (glyph dày hơn) | vừa |
+| **FauxItalic** | false | giả nghiêng | vừa |
+| **VerticalScale** | 1.0 | kéo dọc (chỉ đọc cho geometry, KHÔNG áp vào vẽ) | vừa |
+| **Leading / AutoLeading** | auto | giãn dòng (tên ≥2 dòng) | vừa |
+| **BaselineShift** | 0 | dời baseline | thấp |
+| **Kerning / AutoKerning** | auto | kern tay từng cặp | thấp |
+| **Underline / Strikethrough** | false | gạch chân / gạch ngang | thấp |
+| **StrokeColor** | — | viền trong Character panel (khác Layer Style Stroke) | thấp |
+| **Ligatures / DLigatures** | — | chữ ghép | thấp |
+
 ## 2. Từng layer text — duyệt HẾT 10 loại Layer Style (`_effects`)
 Photoshop có đúng 10 nhóm effect. Tick từng dòng cho MỖI layer — có/không.
 Loại ✅ phải lấy đủ (đừng bỏ layer nào); loại ⚠ nếu bật thì **BÁO user**
@@ -48,7 +65,8 @@ mỗi dòng phải tick, gặp cột "báo" thì **báo user, không render lặ
 
 | warpStyle | tool làm gì hiện tại | trạng thái |
 |-----------|----------------------|------------|
-| warpNone / bend=0 | vẽ thẳng | ✅ đúng |
+| warpNone (không warp) | nếu pixel cong đủ lớn (sag≥25) → detect qua **pixel-fallback** rồi vẽ cong; không thì thẳng | ✅ — chữ cong NƯỚNG SẴN/uốn tay vào pixel (banner LTL) vẫn bắt được. ĐỪNG hard-return 0 cho warpNone |
+| warp THẬT + bend=0 | vẽ thẳng | ✅ đúng (deterministic) |
 | **warpArch** | **xoay glyph theo cung như Arc** | ⚠ XẤP XỈ — Arch thật chữ ĐỨNG THẲNG, chỉ mép trên/dưới cong. Phải soi mắt xem chữ có bị nghiêng sai không |
 | warpArc / warpArcUpper / warpArcLower | parabol + xoay glyph theo tiếp tuyến | ~ gần đúng (parabol thay cung tròn) |
 | warpBulge / warpShellUpper / warpShellLower | — | ⚠ CHƯA DỰNG, coi thẳng → báo |
@@ -61,7 +79,13 @@ mỗi dòng phải tick, gặp cột "báo" thì **báo user, không render lặ
 - [ ] **Arch vs Arc**: xác nhận đúng loại. Arc = chữ nghiêng theo cung;
       Arch = chữ đứng thẳng. Nhầm loại = chữ nghiêng/thẳng sai.
 
-## 4. Layer nền + thứ tự (`_bg_layer`, `_bake_bases`)
+## 4. Thuộc tính layer (mọi layer, cả text lẫn art)
+- [ ] **opacity** < 255 → layer mờ; tool có tính không? Nếu không → báo.
+- [ ] **blend_mode** ≠ NORMAL (Multiply/Screen/Overlay…) → tool vẽ như NORMAL → ⚠ báo.
+- [ ] **layer mask** (`has_mask`) → vùng ẩn một phần; tool bỏ qua → ⚠ báo.
+- [ ] Layer **ẩn** (mắt off) → đừng dựng nhầm.
+
+## 5. Layer nền + thứ tự (`_bg_layer`, `_bake_bases`)
 - [ ] Có layer **background 1 màu đơn full-canvas** không? → cho đổi màu nền.
 - [ ] Có **art/pattern nằm TRÊN** text (đè lên) không? → giữ z-order (base_above).
 
