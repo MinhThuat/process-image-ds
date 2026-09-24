@@ -711,19 +711,18 @@ def _bevel_fill(amask, bev):
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def _draw_arc(img, f, font, value, size, override=None):
-    """Vẽ từng chữ dọc theo parabol: đỉnh ở giữa box, hai mép thấp hơn |arc| px.
-    arc>0 = cong lên (cười); mỗi glyph xoay tiếp tuyến với cung."""
+def _stamp_arc(layer, f, font, value, size, fill, sw=0, scol=None, ox=0, oy=0):
+    """Dán từng chữ theo cung parabol lên layer (fill + stroke, xoay tiếp tuyến), lệch (ox,oy).
+    Tái dùng cho: pass shadow, pass chữ+viền. đỉnh ở giữa box, hai mép thấp hơn |arc| px."""
     x0, y0, x1, y1 = f["box"]
     W = max(1, x1 - x0); xc = (x0 + x1) / 2
     arc = float(f["arc"])
-    color = override or tuple(f["color"])
     just = f.get("justify", "center")
     track_px = float(f.get("track") or 0) / 1000.0 * size    # giãn cách chữ (PS tracking)
     _, tot = _layout(font, value, track_px)
     startx = {"left": x0, "right": x1 - tot, "center": xc - tot / 2}[just]
     Yv = y0 + f["top_frac"] * size                  # baseline tại đỉnh cung
-    T = int(size * 3) + 8; half = T / 2
+    T = int(size * 3) + 8 + 2 * sw; half = T / 2
     cur = startx
     for ch in value:
         cw = font.getlength(ch) + track_px
@@ -732,10 +731,47 @@ def _draw_arc(img, f, font, value, size, override=None):
         slope = arc * 2 * (cur - xc) / ((W / 2) ** 2)
         ang = math.degrees(math.atan(slope))
         tile = Image.new("RGBA", (T, T), (0, 0, 0, 0))
-        ImageDraw.Draw(tile).text((half, half), ch, font=font, fill=color, anchor="ls")
+        ImageDraw.Draw(tile).text((half, half), ch, font=font, fill=fill, anchor="ls",
+                                  stroke_width=sw, stroke_fill=scol)
         tile = tile.rotate(-ang, resample=Image.BICUBIC, center=(half, half))
-        img.alpha_composite(tile, (int(round(cur - half)), int(round(py - half))))
+        layer.alpha_composite(tile, (int(round(cur - half + ox)), int(round(py - half + oy))))
         cur += cw
+
+
+def _draw_arc(img, f, font, value, size, override=None):
+    """Chữ cong (banner) + effect: drop shadow, stroke, glow. Fill = màu đặc (gradient/pattern
+    trên chữ cong dùng màu đặc). arc>0 = cong lên; mỗi glyph xoay tiếp tuyến với cung."""
+    fx = f.get("effects") or {}
+    fill = _rgba(override or f["color"])
+    sw = int(fx.get("stroke") or 0)
+    scol = _rgba(fx.get("stroke_color") or (0, 0, 0))
+    # 1. outer glow
+    glow = fx.get("glow")
+    if glow:
+        gc = _rgba(glow["color"])
+        lay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        _stamp_arc(lay, f, font, value, size, gc, sw, gc)
+        lay = lay.filter(ImageFilter.GaussianBlur(max(1, glow["size"])))
+        op = glow.get("opacity", 255)
+        if op < 255:
+            lay.putalpha(lay.split()[3].point(lambda p: p * op // 255))
+        img.alpha_composite(lay)
+    # 2. drop shadow (silhouette gồm cả stroke, lệch + blur)
+    sh = fx.get("shadow")
+    if sh:
+        sc = _rgba(sh["color"])
+        lay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        _stamp_arc(lay, f, font, value, size, sc, sw, sc, sh["dx"], sh["dy"])
+        if sh.get("blur"):
+            lay = lay.filter(ImageFilter.GaussianBlur(sh["blur"]))
+        op = sh.get("opacity", 255)
+        if op < 255:
+            lay.putalpha(lay.split()[3].point(lambda p: p * op // 255))
+        img.alpha_composite(lay)
+    # 3. chữ + viền (stroke curve theo cung, nằm dưới fill)
+    main = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    _stamp_arc(main, f, font, value, size, fill, sw, scol)
+    img.alpha_composite(main)
 
 
 def render_one(tpl, tdir, values):
@@ -777,8 +813,8 @@ def render_rows(slug, rows, data_dir, out_dir, fmts=("png", "jpg")):
         if "png" in fmts:
             pp = out_dir / f"{stem}.png"; img.save(pp, dpi=(dpi, dpi)); made.append(pp)
         if "jpg" in fmts:
-            jp = out_dir / f"{stem}.jpg"
-            img.convert("RGB").save(jp, quality=95, dpi=(dpi, dpi)); made.append(jp)
+            jp = out_dir / f"{stem}.jpg"                 # subsampling=0: giữ full độ phân giải màu
+            img.convert("RGB").save(jp, quality=95, subsampling=0, dpi=(dpi, dpi)); made.append(jp)
         outs.append(made[0])                             # ưu tiên PNG cho preview nếu có
     return outs
 

@@ -68,8 +68,10 @@ def _src_mtime():
     return max((f.stat().st_mtime for f in SRC if f.exists()), default=0)
 
 
+_NOCACHE = {"Cache-Control": "no-cache"}   # HTML luôn revalidate -> không serve bản cũ đã cache
+
 async def index(request):
-    return web.FileResponse(ROOT / "index.html")
+    return web.FileResponse(ROOT / "index.html", headers=_NOCACHE)
 
 
 async def media(request):
@@ -293,7 +295,7 @@ def _need_magnet(h):
     return w
 
 async def magnet_page(request):
-    return web.FileResponse(ROOT / "magnet.html")
+    return web.FileResponse(ROOT / "magnet.html", headers=_NOCACHE)
 
 async def magnet_img(request):
     p = Path(os.path.realpath(request.query.get("p", "")))
