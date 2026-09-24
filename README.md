@@ -53,7 +53,11 @@ Bấm **🏷️ Custom** ở góc phải. Học 1 lần / loại, tái dùng mã
 
 Nhớ trong `flat_studio_data/magnet_templates/<slug>/` (base.png đã trống tên + font + template.json). PSD gốc không bị đụng. Chữ dài tự co vừa khung. Chỉ đổi field dạng **text**; chọn tàu/năm bằng layer ảnh ẩn-hiện chưa hỗ trợ.
 
-**Tên cong (đặt trên cung, vd banner):** tự dò độ cong từ mẫu (cột **Cong** trong bảng field, dương = cong lên). Trên preview hiện đường cong + tay kéo (chấm vàng mép phải) để chỉnh cho khớp. Render vẽ từng chữ xoay theo cung.
+**Tên cong:** đọc kiểu warp, Bend, bounds và transform từ PSD. Với **Arch ngang**, không perspective/rotation/skew, tool uốn cả dòng chữ theo hình học Arch rồi mới vẽ viền/bóng; dùng cỡ chữ và tỉ lệ thiết kế. Cột **Cong** là độ võng theo pixel (dương = cong lên), preview và tay kéo dùng cùng đường cong với renderer. Kiểu warp khác có thông báo “chỉ dựng gần đúng”; template cũ vẫn dùng cách xoay từng chữ theo cung.
+
+Khi không có nền màu đơn cần thay đổi, vùng ngoài các field được chọn giữ pixel từ preview Photoshop, tránh dựng lại sai effects của layer cố định.
+
+**Sau khi cập nhật bộ đọc Arch:** học lại PSD cùng font và lưu lại template để bổ sung thông số warp. Template đã lưu trước đây không chứa đủ dữ liệu để tự nâng cấp chính xác. Việc dựng lại bằng Pillow/OpenCV vẫn có thể khác Photoshop ở raster chữ, kerning và một số effects; không bảo đảm khớp từng pixel.
 
 **Effect trên layer tên:** tự đọc từ PSD (`layer.effects`) và vẽ lại — **Stroke** (viền), **Drop Shadow** (bóng, hướng + mờ), **Color Overlay** (đè màu), **Gradient Overlay** (dải màu), **Outer Glow** (hào quang), **Inner Shadow** (bóng trong), **Bevel/Emboss** (nổi khối kim loại — *xấp xỉ ~90%*). Đọc **theo tham số sống** nên đổi số (viền dày/mảnh, màu, góc) tự chạy, không cần sửa code. Chưa dựng: **Satin / Pattern / Inner Glow** → hiện ⚠ tại field khi học mẫu để biết. Effect trên phần KHÔNG đổi (nền, tiêu đề) luôn giữ nguyên vì nằm sẵn trong base.png. Lưu ý: khi 1 layer chồng nhiều effect (vd chrome = bevel+gradient+pattern), thứ tự trộn của Photoshop phức tạp nên kết quả *gần đúng*, không khớp 100% pixel.
 
@@ -78,3 +82,11 @@ Mặc định nằm cạnh studio (cùng folder cha): `../flat_studio_data/`
 
 ## Mở thư mục nhanh
 Bấm vào bất kỳ ảnh nào trên bàn cắt (mảnh crop, panel, hay thành phẩm) → mở thẳng thư mục chứa ảnh đó bằng File Explorer.
+
+## Kiểm tra hồi quy chữ Arch
+
+```bash
+python tests/repro_curve.py "/path/to/VTY162607A01_back.psd" --out /tmp/magnet-arch-check --integration
+```
+
+Cần font đi kèm trong cùng thư mục PSD. Kiểm tra hình chữ gốc (IoU ≥ 0.85), thay tên ngắn/dài, dời box, đổi độ cong/màu, template cũ và lưu/nạp template → xuất PNG/JPG. `--integration` cũng kiểm tra layer chữ cố định giữ nguyên pixel và xuất ảnh so sánh.

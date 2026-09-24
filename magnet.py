@@ -239,6 +239,48 @@ def _grad(e):
         return None
 
 
+def _text_geometry(layer):
+    """Retain PSD warp and pre-warp coordinates instead of reducing every warp to an arc."""
+    wp = getattr(layer, "warp", None) or {}
+    def enum(key, default):
+        return getattr(wp.get(key), "enum", default).decode("ascii", "replace")
+    sd = layer.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
+    def rect(key):
+        d = layer._data.text_data.get(key)
+        return [float(d[k]) for k in (b"Left", b"Top ", b"Rght", b"Btom")] if d else None
+    return {
+        "warp": {"style": enum(b"warpStyle", b"warpNone"),
+                 "bend": float(wp.get(b"warpValue", 0)),
+                 "perspective": float(wp.get(b"warpPerspective", 0)),
+                 "perspective_other": float(wp.get(b"warpPerspectiveOther", 0)),
+                 "orientation": enum(b"warpRotate", b"Hrzn")},
+        "transform": [float(v) for v in layer.transform],
+        "bounds": rect(b"bounds"), "ink_bounds": rect(b"boundingBox"),
+        "font_size": float(sd.get("FontSize", 0)),
+        "vertical_scale": float(sd.get("VerticalScale", 1)),
+        "baseline_shift": float(sd.get("BaselineShift", 0)),
+        "reference_box": list(layer.bbox),
+    }
+
+
+def _supports_arch(g):
+    if not g:
+        return False
+    w = g["warp"]
+    a, b, c, d, _, _ = g["transform"]
+    bounds = g.get("bounds")
+    return (w["style"] == "warpArch" and w["orientation"] == "Hrzn"
+            and not w["perspective"] and not w["perspective_other"]
+            and abs(b) < 1e-6 and abs(c) < 1e-6 and a > 0 and d > 0
+            and g["vertical_scale"] > 0 and bounds is not None
+            and bounds[2] > bounds[0] and abs(w["bend"]) < 100)
+
+
+def _arch_sagitta(g):
+    width = (g["bounds"][2] - g["bounds"][0]) * g["transform"][0]
+    return width / 2 * math.tan(g["warp"]["bend"] / 100 * math.pi / 4)
+
+
 def _detect_arc(layer):
     """Độ cong (sagitta px, dương = cong lên/cười) của tên đặt trên cung. 0 = thẳng.
 
@@ -252,7 +294,13 @@ def _detect_arc(layer):
             bend = float(wp.get(b"warpValue", 0) or 0)
             x0, _y0, x1, _y1 = layer.bbox
             width = max(1, x1 - x0)
-            if b"Arc" in enum:                      # warpArc / warpArch / warpArcUpper|Lower
+            if enum == b"warpNone" or (enum and not bend):
+                return 0.0                          # explicit straight text: no pixel heuristic
+            if enum == b"warpArch":
+                geometry = _text_geometry(layer)
+                if _supports_arch(geometry):
+                    return _arch_sagitta(geometry)
+            if enum in (b"warpArch", b"warpArc", b"warpArcUpper", b"warpArcLower"):
                 # bend% -> sagitta parabol px (dùng cùng cỡ chữ thiết kế thật -> khớp mẫu; bend 32,
                 # width 2576 -> ~340, xấp xỉ box_h - cap_height).
                 return float(round(0.412 * bend / 100.0 * width)) if abs(bend) >= 1 else 0.0
@@ -332,6 +380,18 @@ def analyze(psd_path):
         else:
             cal_box = [box[0], box[1], box[2], box[3] - int(abs(arc))]   # (không có warp) bỏ phần cong khi tính cỡ
             size_px, top_frac = _calibrate(ff, txt, cal_box) if ff else (max(1, cal_box[3] - cal_box[1]), 0.8)
+        geometry = None
+        try:
+            geometry = _text_geometry(l)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            pass
+        if _supports_arch(geometry):
+            tr = geometry["transform"]
+            size_px = max(4, round(_design_size(l) * geometry["vertical_scale"]))
+            hscale *= tr[0] / tr[3] / geometry["vertical_scale"]
+            baseline = tr[5] - geometry["baseline_shift"] * tr[3]
+            top_frac = (baseline - arc - box[1]) / size_px
+            geometry["justify"] = just
         key = re.sub(r"[^a-z0-9]+", "_", str(l.name or "field").lower()).strip("_") or "field"
         while key in used:
             key += "_2"
@@ -345,7 +405,10 @@ def analyze(psd_path):
             "arc": arc, "track": track, "hscale": round(hscale, 4), "effects": _effects(l),
             "clip_layers": _clip_names(l),          # pattern mask vào chữ (nếu có)
             "pattern": bool(_clip_names(l)),         # cờ cho UI + save; save đổi thành tên file texture
+            "text_geometry": geometry,
         })
+        if geometry and geometry["warp"]["style"] != "warpNone" and not _supports_arch(geometry):
+            fields[-1]["warp_warning"] = "Warp chỉ dựng gần đúng: " + geometry["warp"]["style"]
     preview = psd.composite()
     bg_name, bg_color = _bg_layer(psd)                    # nền màu đơn đổi được (nếu có)
     bg = {"layer": bg_name, "color": bg_color} if bg_name else None
@@ -449,6 +512,41 @@ def _bake_bases(psd_path, exclude_names, bg_name=None):
     return below, above
 
 
+def _preserve_static_pixels(psd_path, below, above, exclude_names, bg_name=None):
+    """Use Photoshop's merged preview outside the editable layers' original footprints.
+
+    Re-compositing an untouched layer can change its effects in psd-tools. Keep
+    those pixels verbatim. An editable solid background requires the transparent
+    baked bases instead, so that case deliberately keeps the existing path.
+    """
+    if bg_name:
+        return below, above
+    psd = PSDImage.open(str(psd_path))
+    preview = psd.topil()
+    if preview is None:
+        return below, above
+    preview = preview.convert("RGBA")
+    affected = Image.new("L", psd.size)
+    draw = ImageDraw.Draw(affected)
+    names = set(exclude_names)
+    for layer in psd.descendants():
+        if layer.name not in names:
+            continue
+        effects = _effects(layer)
+        margin = max([4] + [w for w, _ in _strokes_of(effects)])
+        margin += max([0] + [abs(e.get("dx", 0)) + abs(e.get("dy", 0))
+                             + 4 * e.get("blur", e.get("size", 0))
+                             for k in ("shadow", "glow", "inner_shadow") if (e := effects.get(k))])
+        x0, y0, x1, y1 = layer.bbox
+        draw.rectangle((x0-margin, y0-margin, x1+margin, y1+margin), fill=255)
+    below = Image.composite(below, preview, affected)
+    if above is not None:
+        above.putalpha(ImageChops.multiply(above.getchannel("A"), affected))
+        if not above.getbbox():
+            above = None
+    return below, above
+
+
 # ---------- save template ----------
 def _reg(data_dir):
     d = Path(data_dir) / "magnet_templates"
@@ -467,6 +565,7 @@ def save_template(psd_path, slug, fields, data_dir):
     clip_hide = [c for f in fields for c in f.get("clip_layers", [])]   # layer pattern -> ẩn khỏi base
     exclude = [f["layer"] for f in fields] + clip_hide
     base, base_above = _bake_bases(psd_path, exclude, bg_name)           # tách z-order: dưới/trên chữ
+    base, base_above = _preserve_static_pixels(psd_path, base, base_above, exclude, bg_name)
     base.save(tdir / "base.png", dpi=(dpi, dpi))
     src_folder = psd_path.parent
     saved = []
@@ -589,9 +688,173 @@ def _hsqueeze(layer, cx, s):
     return out
 
 
+def _arch_geometry(f):
+    """Canvas-space arch, adjusted for the editable box and sagitta (also used by the UI)."""
+    g = f["text_geometry"]
+    a, _, _, _, tx, _ = g["transform"]
+    old = g["reference_box"]
+    box = f["box"]
+    ratio = max(1.0, box[2] - box[0]) / max(1.0, old[2] - old[0])
+    width = (g["bounds"][2] - g["bounds"][0]) * a * ratio
+    center = tx + (g["bounds"][0] + g["bounds"][2]) * a / 2
+    center = box[0] + (center - old[0]) * ratio
+    anchor = box[0] + (tx - old[0]) * ratio
+    if f.get("justify", "center") != g.get("justify", "center"):
+        anchor = {"left": box[0], "center": center, "right": box[2]}[f["justify"]]
+    # Arch above 180 degrees folds back onto itself and is not invertible.
+    sag = float(f.get("arc") or 0)
+    sag = math.copysign(min(abs(sag), width / 2 * .999999), sag)
+    return width, center, anchor, sag
+
+
+def _paint_arch_mask(mask, f, tdir, override=None):
+    """Apply effects AFTER warping: outline thickness and shadow direction stay in canvas space."""
+    import cv2
+    fx = f.get("effects") or {}
+    oc = _hex(override)
+    fill = oc or _rgba(fx.get("fill") or f["color"])
+    strokes = _strokes_of(fx)
+    out = Image.new("RGBA", mask.size)
+
+    def stamp(alpha, color, opacity=255):
+        color = _rgba(color)
+        strength = color[3] * opacity / (255 * 255)
+        if strength < 1:
+            alpha = alpha.point(lambda v: round(v * strength))
+        layer = Image.new("RGBA", mask.size, color[:3] + (0,))
+        layer.putalpha(alpha)
+        out.alpha_composite(layer)
+
+    def dilate(radius):
+        radius = max(0, int(round(radius)))
+        if not radius:
+            return mask
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+        return Image.fromarray(cv2.dilate(np.asarray(mask), kernel))
+
+    def shift(alpha, dx, dy):
+        shifted = Image.new("L", mask.size)
+        shifted.paste(alpha, (int(round(dx)), int(round(dy))))
+        return shifted
+
+    glow = fx.get("glow")
+    if glow:
+        stamp(mask.filter(ImageFilter.GaussianBlur(max(1, glow["size"]))),
+              glow["color"], glow.get("opacity", 255))
+    shadow = fx.get("shadow")
+    if shadow:
+        silhouette = dilate(strokes[0][0] if strokes else 0)
+        silhouette = shift(silhouette, shadow["dx"], shadow["dy"])
+        if shadow.get("blur"):
+            silhouette = silhouette.filter(ImageFilter.GaussianBlur(shadow["blur"]))
+        stamp(silhouette, shadow["color"], shadow.get("opacity", 255))
+    for radius, color in strokes:
+        stamp(dilate(radius), color)
+
+    bbox = mask.getbbox()
+    pattern = f.get("pattern")
+    texture = tdir / pattern if isinstance(pattern, str) else None
+    if not oc and texture and texture.is_file():
+        patch = Image.open(texture).convert("RGB").resize((bbox[2] - bbox[0], bbox[3] - bbox[1]))
+        layer = Image.new("RGBA", mask.size)
+        layer.paste(patch, bbox[:2]); layer.putalpha(mask)
+        out.alpha_composite(layer)
+    elif not oc and (fx.get("bevel") or fx.get("gradient")):
+        rgb = (_bevel_fill(mask, fx["bevel"]) if fx.get("bevel")
+               else _grad_fill(mask.size, bbox, fx["gradient"]))
+        layer = Image.fromarray(rgb).convert("RGBA"); layer.putalpha(mask)
+        out.alpha_composite(layer)
+    else:
+        stamp(mask, fill)
+    inner = fx.get("inner_shadow")
+    if inner and not oc:
+        shifted = shift(mask, inner["dx"], inner["dy"])
+        if inner.get("blur"):
+            shifted = shifted.filter(ImageFilter.GaussianBlur(inner["blur"]))
+        stamp(ImageChops.subtract(mask, shifted), inner["color"], inner.get("opacity", 255))
+    return out
+
+
+def _draw_arch_field(img, f, tdir, value, override=None):
+    """Photoshop horizontal Arch: circular x remap and y displacement, not rotated glyphs.
+
+    The saved bounds define the warp domain. New text keeps this domain and shrinks
+    only when it exceeds its width. Old templates without geometry use the legacy renderer.
+    """
+    import cv2
+    if not value:
+        return
+    width, center, anchor, sag = _arch_geometry(f)
+    hs = max(.01, float(f.get("hscale") or 1))
+    tracking = float(f.get("track") or 0) / 1000
+    size = max(4, int(round(f["size_px"])))
+    font_path = str(tdir / "fonts" / f["font_file"])
+    def measure(font, text):
+        return _layout(font, text, tracking * font.size)[1] if tracking else font.getlength(text)
+    font = ImageFont.truetype(font_path, size)
+    # Keep the original design size despite small font-rasterizer rounding differences.
+    old = f["text_geometry"]["reference_box"]
+    box_ratio = max(1, f["box"][2] - f["box"][0]) / max(1, old[2] - old[0])
+    limit = max(width, measure(font, str(f.get("text") or "")) * hs * box_ratio)
+    advance = measure(font, value)
+    if advance * hs > limit:
+        size = max(4, int(size * limit / (advance * hs)))
+        font = ImageFont.truetype(font_path, size)
+        advance = measure(font, value)
+    track_px = tracking * size
+    xs, _ = _layout(font, value, track_px)
+    if track_px:
+        boxes = [(x + b[0], b[1], x + b[2], b[3])
+                 for x, ch in xs for b in [font.getbbox(ch, anchor="ls")]]
+        ink = (min(b[0] for b in boxes), min(b[1] for b in boxes),
+               max(b[2] for b in boxes), max(b[3] for b in boxes))
+    else:
+        ink = font.getbbox(value, anchor="ls")
+    left, top = math.floor(ink[0]) - 2, math.floor(ink[1]) - 2
+    right, bottom = math.ceil(ink[2]) + 2, math.ceil(ink[3]) + 2
+    plain = Image.new("L", (max(1, right - left), max(1, bottom - top)))
+    _draw_tracked(ImageDraw.Draw(plain), -left, -top, value, font, 255, "l", track_px)
+    start = anchor - {"left": 0, "center": advance * hs / 2, "right": advance * hs}[f.get("justify", "center")]
+    baseline = f["box"][1] + f["top_frac"] * size + sag
+
+    fx = f.get("effects") or {}
+    margin = max([4] + [w for w, _ in _strokes_of(fx)])
+    margin += max([0] + [abs(e.get("dx", 0)) + abs(e.get("dy", 0))
+                         + 4 * e.get("blur", e.get("size", 0))
+                         for k in ("shadow", "glow", "inner_shadow") if (e := fx.get(k))])
+    x0 = max(0, math.floor(min(center - width / 2, start + left * hs) - margin))
+    x1 = min(img.width, math.ceil(max(center + width / 2, start + right * hs) + margin))
+    y0 = max(0, math.floor(baseline + top - abs(sag) - margin))
+    y1 = min(img.height, math.ceil(baseline + bottom + abs(sag) + margin))
+    if x1 <= x0 or y1 <= y0:
+        return
+    xx, yy = np.meshgrid(np.arange(x0, x1, dtype=np.float32), np.arange(y0, y1, dtype=np.float32))
+    if abs(sag) > 1e-5:
+        theta = 2 * math.atan(2 * abs(sag) / width)
+        radius = width / (2 * math.sin(theta))
+        nx = (xx - center) / radius
+        unwarped_x = center + width / 2 * np.arcsin(np.clip(nx, -1, 1)) / theta
+        rise = math.copysign(1, sag) * (np.sqrt(np.maximum(0, radius * radius - (xx - center) ** 2))
+                                      - radius * math.cos(theta))
+    else:
+        unwarped_x, rise = xx, 0
+    map_x = ((unwarped_x - start) / hs - left).astype(np.float32)
+    map_y = (yy + rise - baseline - top).astype(np.float32)
+    warped = cv2.remap(np.asarray(plain), map_x, map_y, cv2.INTER_LINEAR,
+                       borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    if abs(sag) > 1e-5:
+        warped[np.abs(nx) >= 1] = 0
+    mask = Image.fromarray(warped)
+    if mask.getbbox():
+        img.alpha_composite(_paint_arch_mask(mask, f, tdir, override), (x0, y0))
+
+
 def _draw_field(img, f, tdir, value, override=None):
     """Bọc quanh _draw_field_raw: nếu PSD nén ngang (HorizontalScale != 1) thì vẽ ở box nới
     rộng 1/hs rồi nén lại đúng hs -> chữ giữ đúng chiều cao thiết kế, không bị auto-shrink cả 2 chiều."""
+    if _supports_arch(f.get("text_geometry")):
+        _draw_arch_field(img, f, tdir, value, override)
+        return
     hs = float(f.get("hscale") or 1.0)
     if abs(hs - 1.0) < 1e-3:
         _draw_field_raw(img, f, tdir, value, override)
