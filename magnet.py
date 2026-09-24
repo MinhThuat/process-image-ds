@@ -253,8 +253,9 @@ def _detect_arc(layer):
             x0, _y0, x1, _y1 = layer.bbox
             width = max(1, x1 - x0)
             if b"Arc" in enum:                      # warpArc / warpArch / warpArcUpper|Lower
-                # bend% -> sagitta px (hiệu chỉnh: bend 32, width 2576 -> ~340)
-                return float(round(0.412 * bend / 100.0 * width)) if abs(bend) >= 1 else 0.0
+                # bend% -> sagitta parabol px. Hiệu chỉnh theo RENDER khớp mẫu PS (bend 32, width
+                # 2576 -> ~420): pixel-detect under-đọc vì đáy glyph xoay bị kéo lên, nên factor cao hơn.
+                return float(round(0.51 * bend / 100.0 * width)) if abs(bend) >= 1 else 0.0
             if enum not in (b"warpNone", b""):
                 return 0.0                          # warp kiểu khác (wave/flag...) -> coi thẳng, né parabol sai
     except Exception:
