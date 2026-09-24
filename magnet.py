@@ -231,9 +231,24 @@ def _grad(e):
 def _detect_arc(layer):
     """Độ cong (sagitta px, dương = cong lên/cười) của tên đặt trên cung. 0 = thẳng.
 
-    PSD không lưu type-on-path, nên tự dò: khớp parabol vào 'đáy mực' theo cột.
+    ƯU TIÊN đọc warp data trong PSD (ổn định MỌI máy/version psd_tools). Chỉ khi PSD không
+    có warp mới dò từ pixel (composite warp không đồng nhất giữa các version -> lệch máy).
     """
-    try:
+    try:                                            # 1. warp data (nguồn chuẩn, deterministic)
+        wp = getattr(layer, "warp", None)
+        if wp:
+            enum = getattr(wp.get(b"warpStyle"), "enum", b"") or b""
+            bend = float(wp.get(b"warpValue", 0) or 0)
+            x0, _y0, x1, _y1 = layer.bbox
+            width = max(1, x1 - x0)
+            if b"Arc" in enum:                      # warpArc / warpArch / warpArcUpper|Lower
+                # bend% -> sagitta px (hiệu chỉnh: bend 32, width 2576 -> ~340)
+                return float(round(0.412 * bend / 100.0 * width)) if abs(bend) >= 1 else 0.0
+            if enum not in (b"warpNone", b""):
+                return 0.0                          # warp kiểu khác (wave/flag...) -> coi thẳng, né parabol sai
+    except Exception:
+        pass
+    try:                                            # 2. fallback: dò từ pixel (PSD không có warp)
         a = np.asarray(layer.composite(force=True))
         if a.ndim != 3 or a.shape[2] < 4:
             return 0.0
@@ -813,8 +828,8 @@ def render_rows(slug, rows, data_dir, out_dir, fmts=("png", "jpg")):
         if "png" in fmts:
             pp = out_dir / f"{stem}.png"; img.save(pp, dpi=(dpi, dpi)); made.append(pp)
         if "jpg" in fmts:
-            jp = out_dir / f"{stem}.jpg"                 # subsampling=0: giữ full độ phân giải màu
-            img.convert("RGB").save(jp, quality=95, subsampling=0, dpi=(dpi, dpi)); made.append(jp)
+            jp = out_dir / f"{stem}.jpg"                 # q100 + subsampling=0: gần lossless, hết mờ mép chữ
+            img.convert("RGB").save(jp, quality=100, subsampling=0, dpi=(dpi, dpi)); made.append(jp)
         outs.append(made[0])                             # ưu tiên PNG cho preview nếu có
     return outs
 
