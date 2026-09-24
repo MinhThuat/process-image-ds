@@ -401,8 +401,8 @@ function tplFilter(){
   const q = ($("#tplsearch").value||"").trim().toLowerCase();
   return q ? TEMPLATES.filter(t=>t.slug.toLowerCase().includes(q)) : TEMPLATES;
 }
-function renderResults(){
-  const box = $("#tplresults"), list = tplFilter();
+function renderResults(all){
+  const box = $("#tplresults"), list = all ? TEMPLATES : tplFilter();   // all=true -> toàn bộ template
   box.classList.remove("hidden");
   if(!list.length){ box.innerHTML = `<div class="none">không có template khớp</div>`; ACT=-1; return; }
   if(ACT<0 || ACT>=list.length) ACT = 0;
@@ -432,12 +432,12 @@ function fillTemplates(list, sel){
 (function(){
   const S = $("#tplsearch");
   S.oninput  = () => { ACT = 0; renderResults(); };
-  S.onfocus  = () => { S.select(); ACT = -1; renderResults(); };
+  S.onfocus  = () => { S.select(); ACT = -1; renderResults(true); };   // mở ra hiện TOÀN BỘ template
   S.onblur   = () => setTimeout(()=>{ hideResults(); S.value = $("#tplsel").value; }, 120);
   S.onkeydown = e => {
-    const list = tplFilter();
+    const list = ($("#tplresults").classList.contains("hidden")) ? TEMPLATES : tplFilter();
     if(e.key==="ArrowDown"){ e.preventDefault();
-      if($("#tplresults").classList.contains("hidden")){ renderResults(); return; }
+      if($("#tplresults").classList.contains("hidden")){ renderResults(true); return; }
       ACT = Math.min(ACT+1, list.length-1); hlResults(); }
     else if(e.key==="ArrowUp"){ e.preventDefault(); ACT = Math.max(ACT-1, 0); hlResults(); }
     else if(e.key==="Enter"){ e.preventDefault(); if(list[ACT]) pickTpl(list[ACT].slug); }

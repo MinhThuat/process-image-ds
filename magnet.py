@@ -171,8 +171,7 @@ def _effects(layer):
             mul = {b"OutF": 1.0, b"CtrF": 0.5, b"InsF": 0.0}.get(e.position, 1.0)
             sw = round(float(e.size) * mul)
             if c and sw > 0:
-                out["stroke"] = sw
-                out["stroke_color"] = list(c)
+                out.setdefault("strokes", []).append({"w": sw, "color": list(c)})   # gom NHIỀU viền (đồng tâm)
         elif n == "DropShadow":
             c = _color(e.color)
             if c:
@@ -205,9 +204,21 @@ def _effects(layer):
                             "angle": float(e.angle), "alt": float(e.altitude)}
         else:
             unsupported.append(n)                          # Satin / Pattern / InnerGlow (chưa dựng)
+    if out.get("strokes"):                                 # viền lớn nhất -> shadow silhouette + tương thích code cũ
+        big = max(out["strokes"], key=lambda s: s["w"])
+        out["stroke"], out["stroke_color"] = big["w"], big["color"]
     if unsupported:
         out["_unsupported"] = unsupported
     return out
+
+
+def _strokes_of(fx):
+    """[(w, rgba)] các viền, sắp LỚN -> NHỎ (để vẽ đồng tâm). Fallback template cũ (1 viền)."""
+    ss = fx.get("strokes")
+    if ss:
+        return sorted([(int(s["w"]), _rgba(s["color"])) for s in ss if s.get("w", 0) > 0], key=lambda x: -x[0])
+    w = int(fx.get("stroke") or 0)
+    return [(w, _rgba(fx.get("stroke_color") or (0, 0, 0)))] if w > 0 else []
 
 
 def _grad(e):
@@ -542,6 +553,14 @@ def _draw_tracked(draw, ax, baseline, value, font, fill, ha, track_px, sw=0, sco
                   stroke_width=sw, stroke_fill=scol)
 
 
+def _draw_text_multi(img, ax, baseline, value, font, ha, track_px, fill, strokes):
+    """Vẽ chữ với NHIỀU viền đồng tâm (lớn->nhỏ, viền nhỏ đè lên) rồi fill trên cùng, lên img."""
+    d = ImageDraw.Draw(img)
+    for w, col in strokes:                              # viền lớn nhất trước (ngoài cùng)
+        _draw_tracked(d, ax, baseline, value, font, (0, 0, 0, 0), ha, track_px, w, col)
+    _draw_tracked(d, ax, baseline, value, font, fill, ha, track_px)   # fill đè lên trên
+
+
 def _hsqueeze(layer, cx, s):
     """Nén ngang cả lớp theo hệ số s quanh trục x=cx (giữ nguyên chiều cao)."""
     W, H = layer.size
@@ -594,8 +613,9 @@ def _draw_field_raw(img, f, tdir, value, override=None):
         return
     fx = f.get("effects") or {}
     fill = oc or _rgba(fx.get("fill") or f["color"])
-    sw = int(fx.get("stroke") or 0)
-    scol = _rgba(fx.get("stroke_color") or (0, 0, 0))
+    strokes = _strokes_of(fx)                       # [(w,rgba)] nhiều viền đồng tâm
+    sw = strokes[0][0] if strokes else 0            # viền lớn nhất (cho shadow silhouette)
+    scol = strokes[0][1] if strokes else _rgba((0, 0, 0))
     just = f.get("justify", "center")
     ax = {"left": x0, "right": x1, "center": (x0 + x1) / 2}[just]
     anchor = {"left": "l", "right": "r", "center": "m"}[just] + "s"   # +baseline
@@ -636,21 +656,21 @@ def _draw_field_raw(img, f, tdir, value, override=None):
             lay.putalpha(lay.split()[3].point(lambda p: p * op // 255))
         img.alpha_composite(lay)
 
-    # ---- fast-path: fill đặc, không effect fill đặc biệt -> vẽ 1 lệnh (như cũ, đã kiểm) ----
+    # ---- fast-path: fill đặc, không effect fill đặc biệt -> vẽ viền (nhiều lớp) + fill ----
     if not (grad or bev or insh or pat_img):
-        _draw_tracked(ImageDraw.Draw(img), ax, baseline, value, font, fill, anchor[0],
-                      track_px, sw, scol)
+        _draw_text_multi(img, ax, baseline, value, font, anchor[0], track_px, fill, strokes)
         return
 
     # ---- fill nâng cao (gradient / bevel): cần alpha mask của chữ ----
     amask = Image.new("L", img.size, 0)
     _draw_tracked(ImageDraw.Draw(amask), ax, baseline, value, font, 255, anchor[0], track_px)
     bbox = amask.getbbox()
-    # 3. stroke (viền) vẽ TRƯỚC fill để nằm dưới
-    if sw:
+    # 3. stroke (nhiều viền đồng tâm) vẽ TRƯỚC fill để nằm dưới
+    if strokes:
         st = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        _draw_tracked(ImageDraw.Draw(st), ax, baseline, value, font, (0, 0, 0, 0),
-                      anchor[0], track_px, sw, scol)
+        std = ImageDraw.Draw(st)
+        for wv, col in strokes:
+            _draw_tracked(std, ax, baseline, value, font, (0, 0, 0, 0), anchor[0], track_px, wv, col)
         img.alpha_composite(st)
     # 4. fill: pattern > bevel > gradient > solid
     if pat_img is not None and bbox:               # trải texture lên bbox chữ mới, clip theo alpha chữ
@@ -726,9 +746,9 @@ def _bevel_fill(amask, bev):
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def _stamp_arc(layer, f, font, value, size, fill, sw=0, scol=None, ox=0, oy=0):
-    """Dán từng chữ theo cung parabol lên layer (fill + stroke, xoay tiếp tuyến), lệch (ox,oy).
-    Tái dùng cho: pass shadow, pass chữ+viền. đỉnh ở giữa box, hai mép thấp hơn |arc| px."""
+def _stamp_arc(layer, f, font, value, size, fill, strokes=(), ox=0, oy=0):
+    """Dán từng chữ theo cung parabol lên layer, mỗi tile vẽ NHIỀU viền đồng tâm (lớn->nhỏ) + fill,
+    xoay tiếp tuyến, lệch (ox,oy). Dùng cho pass shadow/glow (1 viền) và pass chữ (nhiều viền)."""
     x0, y0, x1, y1 = f["box"]
     W = max(1, x1 - x0); xc = (x0 + x1) / 2
     arc = float(f["arc"])
@@ -737,7 +757,8 @@ def _stamp_arc(layer, f, font, value, size, fill, sw=0, scol=None, ox=0, oy=0):
     _, tot = _layout(font, value, track_px)
     startx = {"left": x0, "right": x1 - tot, "center": xc - tot / 2}[just]
     Yv = y0 + f["top_frac"] * size                  # baseline tại đỉnh cung
-    T = int(size * 3) + 8 + 2 * sw; half = T / 2
+    maxsw = max([w for w, _ in strokes], default=0)
+    T = int(size * 3) + 8 + 2 * maxsw; half = T / 2
     cur = startx
     for ch in value:
         cw = font.getlength(ch) + track_px
@@ -745,47 +766,48 @@ def _stamp_arc(layer, f, font, value, size, fill, sw=0, scol=None, ox=0, oy=0):
         py = Yv + arc * t * t                       # baseline y tại chữ này
         slope = arc * 2 * (cur - xc) / ((W / 2) ** 2)
         ang = math.degrees(math.atan(slope))
-        tile = Image.new("RGBA", (T, T), (0, 0, 0, 0))
-        ImageDraw.Draw(tile).text((half, half), ch, font=font, fill=fill, anchor="ls",
-                                  stroke_width=sw, stroke_fill=scol)
+        tile = Image.new("RGBA", (T, T), (0, 0, 0, 0)); td = ImageDraw.Draw(tile)
+        for wv, col in strokes:                     # viền ngoài (lớn) trước, viền trong đè lên
+            td.text((half, half), ch, font=font, fill=(0, 0, 0, 0), anchor="ls", stroke_width=wv, stroke_fill=col)
+        td.text((half, half), ch, font=font, fill=fill, anchor="ls")     # fill trên cùng
         tile = tile.rotate(-ang, resample=Image.BICUBIC, center=(half, half))
         layer.alpha_composite(tile, (int(round(cur - half + ox)), int(round(py - half + oy))))
         cur += cw
 
 
 def _draw_arc(img, f, font, value, size, override=None):
-    """Chữ cong (banner) + effect: drop shadow, stroke, glow. Fill = màu đặc (gradient/pattern
-    trên chữ cong dùng màu đặc). arc>0 = cong lên; mỗi glyph xoay tiếp tuyến với cung."""
+    """Chữ cong (banner) + effect: drop shadow, glow, NHIỀU viền. Fill = màu đặc.
+    arc>0 = cong lên; mỗi glyph xoay tiếp tuyến với cung."""
     fx = f.get("effects") or {}
     fill = _rgba(override or f["color"])
-    sw = int(fx.get("stroke") or 0)
-    scol = _rgba(fx.get("stroke_color") or (0, 0, 0))
-    # 1. outer glow
+    strokes = _strokes_of(fx)                        # [(w,rgba)] lớn->nhỏ
+    big, bigcol = (strokes[0] if strokes else (0, _rgba((0, 0, 0))))
+    # 1. outer glow (silhouette = chữ + viền lớn nhất)
     glow = fx.get("glow")
     if glow:
         gc = _rgba(glow["color"])
         lay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        _stamp_arc(lay, f, font, value, size, gc, sw, gc)
+        _stamp_arc(lay, f, font, value, size, gc, [(big, gc)] if big else ())
         lay = lay.filter(ImageFilter.GaussianBlur(max(1, glow["size"])))
         op = glow.get("opacity", 255)
         if op < 255:
             lay.putalpha(lay.split()[3].point(lambda p: p * op // 255))
         img.alpha_composite(lay)
-    # 2. drop shadow (silhouette gồm cả stroke, lệch + blur)
+    # 2. drop shadow (silhouette gồm cả viền lớn nhất, lệch + blur)
     sh = fx.get("shadow")
     if sh:
         sc = _rgba(sh["color"])
         lay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        _stamp_arc(lay, f, font, value, size, sc, sw, sc, sh["dx"], sh["dy"])
+        _stamp_arc(lay, f, font, value, size, sc, [(big, sc)] if big else (), sh["dx"], sh["dy"])
         if sh.get("blur"):
             lay = lay.filter(ImageFilter.GaussianBlur(sh["blur"]))
         op = sh.get("opacity", 255)
         if op < 255:
             lay.putalpha(lay.split()[3].point(lambda p: p * op // 255))
         img.alpha_composite(lay)
-    # 3. chữ + viền (stroke curve theo cung, nằm dưới fill)
+    # 3. chữ + nhiều viền đồng tâm (curve theo cung)
     main = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    _stamp_arc(main, f, font, value, size, fill, sw, scol)
+    _stamp_arc(main, f, font, value, size, fill, strokes)
     img.alpha_composite(main)
 
 
