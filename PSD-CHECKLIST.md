@@ -100,7 +100,7 @@ mỗi dòng phải tick, gặp cột "báo" thì **báo user, không render lặ
 
 | warpStyle | tool làm gì hiện tại | trạng thái |
 |-----------|----------------------|------------|
-| warpNone (không warp) | nếu pixel cong đủ lớn (sag≥25) → detect qua **pixel-fallback** rồi vẽ cong; không thì thẳng | ✅ — chữ cong NƯỚNG SẴN/uốn tay vào pixel (banner LTL) vẫn bắt được. ĐỪNG hard-return 0 cho warpNone |
+| warpNone (không warp) | **pixel-fallback guard 2-MÉP**: chỉ nhận cong khi CẢ mép trên+dưới cùng cong & đủ lớn; xoay/nghiêng thì bỏ | ✅ cong NƯỚNG SẴN vào pixel (LTL 'The Saenz Family', warpNone nhưng pixel cong) vẫn bắt; ⚠ descender/swash chỉ lệch 1 mép KHÔNG còn ăn nhầm (VPC 'Tony' font Athelas). ĐỪNG hard-return 0 cho warpNone |
 | warp THẬT + bend=0 | vẽ thẳng | ✅ đúng (deterministic) |
 | **warpArch** | `_draw_arch_field` — chữ ĐỨNG THẲNG, chỉ mép trên/dưới cong (khi `_supports_arch`: Hrzn, không perspective, |bend|<100) | ✅ đúng khi đủ điều kiện; ngoài điều kiện → rơi về xấp xỉ Arc → soi mắt |
 | warpArc / warpArcUpper / warpArcLower | parabol + xoay glyph theo tiếp tuyến | ~ gần đúng (parabol thay cung tròn) |

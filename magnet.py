@@ -306,8 +306,9 @@ def _rotation_angle(g):
 def _detect_arc(layer):
     """Độ cong (sagitta px, dương = cong lên/cười) của tên đặt trên cung. 0 = thẳng.
 
-    ƯU TIÊN đọc warp data trong PSD (ổn định MỌI máy/version psd_tools). Chỉ khi PSD không
-    có warp mới dò từ pixel (composite warp không đồng nhất giữa các version -> lệch máy).
+    ƯU TIÊN warp data (deterministic). warpNone: cong có thể NƯỚNG SẴN vào pixel mà PSD
+    không mô tả (banner LTL 'The Saenz Family') -> dò pixel với guard 2-MÉP: chỉ nhận
+    cong khi CẢ mép trên lẫn dưới cùng cong (né descender/swash chỉ lệch 1 mép, vd VPC 'Tony').
     """
     try:                                            # 1. warp data (nguồn chuẩn, deterministic)
         wp = getattr(layer, "warp", None)
@@ -318,21 +319,18 @@ def _detect_arc(layer):
             width = max(1, x1 - x0)
             if enum and enum != b"warpNone" and not bend:
                 return 0.0                          # warp THẬT nhưng bend=0 = thẳng (deterministic)
-            # warpNone: KHÔNG return sớm -> chữ cong có thể nướng sẵn/uốn tay vào pixel
-            # (mẫu LTL banner) -> thả xuống pixel-fallback (có guard sag>=25 né descender giả).
             if enum == b"warpArch":
                 geometry = _text_geometry(layer)
                 if _supports_arch(geometry):
                     return _arch_sagitta(geometry)
             if enum in (b"warpArch", b"warpArc", b"warpArcUpper", b"warpArcLower"):
-                # bend% -> sagitta parabol px (dùng cùng cỡ chữ thiết kế thật -> khớp mẫu; bend 32,
-                # width 2576 -> ~340, xấp xỉ box_h - cap_height).
                 return float(round(0.412 * bend / 100.0 * width)) if abs(bend) >= 1 else 0.0
             if enum not in (b"warpNone", b""):
-                return 0.0                          # warp kiểu khác (wave/flag...) -> coi thẳng, né parabol sai
+                return 0.0                          # warp kiểu khác (wave/flag...) -> coi thẳng
+            # warpNone -> thả xuống pixel-fallback bên dưới
     except Exception:
         pass
-    try:                                            # 2. fallback: dò từ pixel (PSD không có warp)
+    try:                                            # 2. pixel-fallback (chỉ cho warpNone/không warp)
         tr = getattr(layer, "transform", None)      # chữ xoay/nghiêng -> parabol theo cột x là ẢO
         if tr and (abs(tr[1]) > 1e-3 * max(1.0, abs(tr[0])) or
                    abs(tr[2]) > 1e-3 * max(1.0, abs(tr[3]))):
@@ -344,15 +342,20 @@ def _detect_arc(layer):
         cols = np.where(m.any(0))[0]
         if len(cols) < 20:
             return 0.0
-        yb = np.array([np.where(m[:, cx])[0].max() for cx in cols], float)
-        A, B, C = np.polyfit(cols.astype(float), yb, 2)
+        colf = cols.astype(float)
+        yb = np.array([np.where(m[:, cx])[0].max() for cx in cols], float)   # mép DƯỚI
+        yt = np.array([np.where(m[:, cx])[0].min() for cx in cols], float)   # mép TRÊN
         w = float(cols.max() - cols.min())
-        sag = A * w * w / 4.0                          # baseline(mép) - baseline(đỉnh)
+        sag_b = np.polyfit(colf, yb, 2)[0] * w * w / 4.0
+        sag_t = np.polyfit(colf, yt, 2)[0] * w * w / 4.0
         rows = np.where(m.any(1))[0]
         h = float(rows.max() - rows.min()) if len(rows) else 1.0
-        # chỉ coi là cong khi độ cong đủ LỚN so với chiều cao chữ (né descender/swash
-        # của font script tạo parabol giả).
-        return float(round(sag)) if abs(sag) >= max(25, 0.25 * h) else 0.0
+        guard = max(25, 0.25 * h)
+        # Cong THẬT -> CẢ 2 mép cong CÙNG chiều & đều đủ lớn (arc song song, LTL).
+        # Descender/ascender/swash chỉ kéo lệch 1 mép -> min(2 mép) nhỏ -> loại (VPC 'Tony').
+        if sag_b * sag_t > 0 and min(abs(sag_b), abs(sag_t)) >= guard:
+            return float(round(sag_b))
+        return 0.0
     except Exception:
         return 0.0
 
