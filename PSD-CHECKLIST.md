@@ -4,15 +4,22 @@
 > layer text + mọi effect + mọi thông số warp/transform của nó.** Bỏ sót 1
 > effect = ra sai, mất công sửa vòng lại. Đọc trước, làm sau.
 
-Chạy `python3 inspect_psd.py "<đường dẫn .psd>"` để in ra bảng dưới đây trước khi
-đụng code. Chỉ khi bảng đó khớp với những gì tool hỗ trợ mới bắt tay render;
-gặp ô ⚠ (chưa hỗ trợ / lệch) thì báo user trước, không tự bịa.
+Chạy `python3 inspect_psd.py "<đường dẫn .psd>"`. Nó xuất **2 tầng**:
+1. **TOOL-GAP** (in đầu terminal) — chỉ điểm NHANH cái renderer `magnet.py` render
+   sai/xấp xỉ/bỏ qua trên layer text hiện: xoay/nghiêng, fill-opacity (chữ rỗng
+   ruột), warp lạ, effect chưa hỗ trợ, style bị bỏ (FontCaps/FauxItalic…), opacity/
+   blend/mask, text nhiều dòng. **Mỗi dòng ⚠ phải xử hoặc báo user trước khi render.**
+2. **Audit đầy đủ** (`<file>.inspect.json` + `<file>.inspect.audit.txt`) — kiểm kê
+   MỌI trường psd-tools đọc được, kèm trạng thái (`CHƯA XÁC MINH` / `KHÔNG GIẢI MÃ`
+   / `ĐÃ GHI NHẬN` / `ĐANG TẮT` / `LỖI`). Dùng khi TOOL-GAP nghi ngờ hoặc cần soi tay.
 
-> **Nguyên tắc completeness (vì list chép tay kiểu gì cũng sót):**
-> `inspect_psd.py` chạy theo **whitelist** — chỉ những thứ tool THẬT SỰ dựng
-> mới im lặng; **mọi thông số lệch mặc định, mọi effect/warp lạ, kể cả key
-> psd_tools thêm sau này đều tự bị ⚠**. Vậy "đủ hay chưa" = **chạy tool, không
-> còn dòng ⚠ nào chưa xử lý**. Đừng tin mắt đọc tay.
+> **Nguyên tắc completeness:** TOOL-GAP là bản chép TĨNH khả năng renderer (giữ
+> đồng bộ tay với `magnet.py`), audit là toàn bộ dữ liệu thô. "Đủ hay chưa" =
+> **(1) không còn dòng TOOL-GAP nào chưa xử lý**, VÀ **(2) render xong so pixel với
+> composite gốc phải khớp** (bước này mới lộ loại lỗi TOOL-GAP không biết, vd
+> fill-opacity từng bị bỏ sót). Đừng tin mỗi TOOL-GAP; luôn self-check so gốc.
+> Lưu ý: audit đánh dấu MỌI thứ `CHƯA XÁC MINH` (chưa chứng minh render giống PS),
+> không phải "chưa hỗ trợ" — nên `--strict` gần như luôn exit 2, chỉ để ép đọc tay.
 
 > **Chỉ layer TEXT mới phải soi từng tham số.** Mọi layer khác (art, smartobject,
 > adjustment, group, blend, mask...) tool **nướng thẳng từ composite PSD** nên
@@ -37,10 +44,10 @@ gặp ô ⚠ (chưa hỗ trợ / lệch) thì báo user trước, không tự b�
 - [ ] **FillColor** (màu chữ gốc).
 - [ ] **Justification** (căn trái/giữa/phải).
 
-### 1b. Thông số text tool đang BỎ QUA — inspect tự flag nếu ≠ mặc định
+### 1b. Thông số text tool đang BỎ QUA — TOOL-GAP tự flag nếu ≠ mặc định
 `StyleSheetData` có 27 key; tool chỉ áp 6 cái ở §1 (+ StyleRunAlignment). Các key
-dưới **tool không dựng** — bật lên là ra sai. inspect_psd.py flag TỰ ĐỘNG: bất kỳ
-key nào không nằm whitelist mà lệch mặc định (**và cả key lạ chưa phân loại**) đều ⚠:
+dưới **tool không dựng** — bật lên là ra sai. TOOL-GAP flag khi lệch mặc định
+(vd đã bắt được **NVH 'Monika' FontCaps=2**, **TDT 'Nicole' FauxItalic=True**):
 
 | key | mặc định | bật lên = | mức |
 |-----|----------|-----------|-----|
@@ -57,6 +64,12 @@ key nào không nằm whitelist mà lệch mặc định (**và cả key lạ ch
 - [ ] **Text nhiều dòng** (`\r`/`\n` trong text) → tool xử lý 1 dòng → ⚠ kiểm.
 - Không tính (metadata/mặc định luôn bật, không đổi raster): Ligatures, Kashida,
   YUnderline, Language, HindiNumbers, Tsume, BaselineDirection, NoBreak, StrokeColor.
+
+### 1c. Fill opacity (tagged block `BLEND_FILL_OPACITY`, KHÁC layer Opacity) — ĐÃ DỰNG
+- [ ] **Fill opacity < 255** → ruột chữ mờ/rỗng, layer style (viền/bóng) VẪN hiện.
+      Tool honor đúng (mẫu **MLT312 StarJedi** fill=0 = rỗng ruột chỉ còn viền trắng).
+      TOOL-GAP flag. **Lưu ý:** chữ rỗng ruột → đổi màu ruột KHÔNG có tác dụng (đúng
+      bản chất, không phải bug); muốn đổi màu phải nhắm vào viền — hỏi user.
 
 ## 2. Từng layer text — duyệt HẾT 10 loại Layer Style (`_effects`)
 Photoshop có đúng 10 nhóm effect. Tick từng dòng cho MỖI layer — có/không.
@@ -89,7 +102,7 @@ mỗi dòng phải tick, gặp cột "báo" thì **báo user, không render lặ
 |-----------|----------------------|------------|
 | warpNone (không warp) | nếu pixel cong đủ lớn (sag≥25) → detect qua **pixel-fallback** rồi vẽ cong; không thì thẳng | ✅ — chữ cong NƯỚNG SẴN/uốn tay vào pixel (banner LTL) vẫn bắt được. ĐỪNG hard-return 0 cho warpNone |
 | warp THẬT + bend=0 | vẽ thẳng | ✅ đúng (deterministic) |
-| **warpArch** | **xoay glyph theo cung như Arc** | ⚠ XẤP XỈ — Arch thật chữ ĐỨNG THẲNG, chỉ mép trên/dưới cong. Phải soi mắt xem chữ có bị nghiêng sai không |
+| **warpArch** | `_draw_arch_field` — chữ ĐỨNG THẲNG, chỉ mép trên/dưới cong (khi `_supports_arch`: Hrzn, không perspective, |bend|<100) | ✅ đúng khi đủ điều kiện; ngoài điều kiện → rơi về xấp xỉ Arc → soi mắt |
 | warpArc / warpArcUpper / warpArcLower | parabol + xoay glyph theo tiếp tuyến | ~ gần đúng (parabol thay cung tròn) |
 | warpBulge / warpShellUpper / warpShellLower | — | ⚠ CHƯA DỰNG, coi thẳng → báo |
 | warpFlag / warpWave / warpFish / warpRise | — | ⚠ CHƯA DỰNG → báo |
@@ -101,6 +114,12 @@ mỗi dòng phải tick, gặp cột "báo" thì **báo user, không render lặ
 - [ ] **Arch vs Arc**: xác nhận đúng loại. Arc = chữ nghiêng theo cung;
       Arch = chữ đứng thẳng. Nhầm loại = chữ nghiêng/thẳng sai.
 
+### 3b. Transform XOAY / NGHIÊNG (b,c ≠ 0 trong ma trận) — ĐÃ DỰNG
+- [ ] Layer text xoay/nghiêng (vd tay áo LNG 'Shania' 90°, TDT 'Nicole' 3°) →
+      `_draw_rotated_field`: vẽ ngang rồi xoay cả cụm, **NEO theo đầu chữ** (tên dài
+      mọc ra xa, không đè art như Stitch). TOOL-GAP flag để soi lại vị trí.
+- [ ] Pixel-fallback arc BỎ QUA khi layer xoay (parabol theo cột x cho chữ dọc = ẢO).
+
 ## 4. Thuộc tính LAYER TEXT (chỉ layer text; art bake nên bỏ qua)
 - [ ] **opacity** < 255 → tool vẽ đục → ⚠ báo.
 - [ ] **blend_mode** ≠ NORMAL (Multiply/Screen/Overlay…) → tool vẽ NORMAL → ⚠ báo.
@@ -110,11 +129,16 @@ mỗi dòng phải tick, gặp cột "báo" thì **báo user, không render lặ
 ## 5. Layer nền + thứ tự (`_bg_layer`, `_bake_bases`)
 - [ ] Có layer **background 1 màu đơn full-canvas** không? → cho đổi màu nền.
 - [ ] Có **art/pattern nằm TRÊN** text (đè lên) không? → giữ z-order (base_above).
+- [ ] **PSD nhiều GROUP biến thể** (mẫu để nhiều version, đa số ẩn — vd TDT 6 nhân
+      vật): `_bake_bases` chỉ bake layer VỐN hiện, KHÔNG bật layer/group ẩn (nếu không
+      artwork biến thể ẩn lọt vào base thành khối chữ nhật). Đã fix; kiểm base sạch.
 
 ---
 
 ## Sau khi render mẫu mới — self-check bắt buộc
-- [ ] `inspect_psd.py` **không còn dòng ⚠ nào chưa xử lý** (đã sửa hoặc đã báo user).
-- [ ] So render vs composite PSD: **width, cap-height, màu, viền, effect** đều khớp.
-- [ ] Chạy regression `/tmp/rall.py` (hoặc bộ test hiện có) → phải PASS hết,
-      không được làm vỡ case cũ (NMN, MLT, NVH, VTY, LTL…).
+- [ ] **TOOL-GAP không còn dòng nào chưa xử lý** (đã dựng hoặc đã báo user).
+- [ ] **So render vs composite PSD (bắt buộc, quan trọng nhất)**: khớp width, cap-height,
+      màu, viền, effect, **ruột (fill-opacity)**, vị trí. Đo lệch pixel — loại lỗi
+      TOOL-GAP không biết (vd fill-opacity) CHỈ lộ ở bước này.
+- [ ] Render lại đúng tên gốc + 1 tên ngắn + 1 tên dài → kiểm neo/căn/auto-shrink.
+- [ ] Không làm vỡ case cũ (NMN, MLT, NVH, VTY, LTL, LNG, TDT…) — render thử vài mẫu.

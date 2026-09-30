@@ -144,6 +144,17 @@ def _color(d):
     return tuple(max(0, min(255, int(round(x)))) for x in v)
 
 
+def _fill_opacity(layer):
+    """Fill opacity (0-255). PS 'Fill' KHÁC Opacity layer: 0 = ruột chữ tàng hình nhưng
+    layer style (viền/bóng/glow) VẪN hiện -> chữ rỗng ruột chỉ còn viền (mẫu MLT StarJedi)."""
+    try:
+        from psd_tools.constants import Tag
+        v = layer.tagged_blocks.get_data(Tag.BLEND_FILL_OPACITY)
+        return int(v) if v is not None else 255
+    except Exception:
+        return 255
+
+
 def _effects(layer):
     """Effect trên layer tên: fill (ColorOverlay), stroke, drop shadow. {} nếu không có.
 
@@ -281,6 +292,17 @@ def _arch_sagitta(g):
     return width / 2 * math.tan(g["warp"]["bend"] / 100 * math.pi / 4)
 
 
+def _rotation_angle(g):
+    """Góc xoay (độ, atan2) của layer text nếu transform có xoay/nghiêng; None nếu chỉ scale.
+    Chữ xoay (tay áo): vẽ ngang rồi xoay cả cụm. Arch có b=c=0 -> None, không đụng path này."""
+    if not g:
+        return None
+    a, b, c, d = g["transform"][:4]
+    if abs(b) > 1e-3 * max(1.0, abs(a)) or abs(c) > 1e-3 * max(1.0, abs(d)):
+        return math.degrees(math.atan2(b, a))
+    return None
+
+
 def _detect_arc(layer):
     """Độ cong (sagitta px, dương = cong lên/cười) của tên đặt trên cung. 0 = thẳng.
 
@@ -311,6 +333,10 @@ def _detect_arc(layer):
     except Exception:
         pass
     try:                                            # 2. fallback: dò từ pixel (PSD không có warp)
+        tr = getattr(layer, "transform", None)      # chữ xoay/nghiêng -> parabol theo cột x là ẢO
+        if tr and (abs(tr[1]) > 1e-3 * max(1.0, abs(tr[0])) or
+                   abs(tr[2]) > 1e-3 * max(1.0, abs(tr[3]))):
+            return 0.0
         a = np.asarray(layer.composite(force=True))
         if a.ndim != 3 or a.shape[2] < 4:
             return 0.0
@@ -374,7 +400,14 @@ def analyze(psd_path):
         box = list(l.bbox)
         txt = str(l.text)
         arc = _detect_arc(l)                          # tên cong (banner) -> sagitta px
-        ds = _design_size(l) if (arc and ff) else 0   # chữ cong: lấy cỡ THẬT từ warp transform (không trừ arc)
+        geometry = None
+        try:
+            geometry = _text_geometry(l)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            pass
+        rot = _rotation_angle(geometry)               # chữ xoay -> None nếu chỉ scale
+        # chữ cong HOẶC chữ xoay: lấy cỡ THẬT từ transform (box đã bị xoay nên _calibrate sai)
+        ds = _design_size(l) if ((arc or rot is not None) and ff) else 0
         if ds >= 4:
             size_px = int(round(ds))
             top = -ImageFont.truetype(str(ff), size_px).getbbox(txt or "Ag", anchor="ls")[1]
@@ -382,11 +415,6 @@ def analyze(psd_path):
         else:
             cal_box = [box[0], box[1], box[2], box[3] - int(abs(arc))]   # (không có warp) bỏ phần cong khi tính cỡ
             size_px, top_frac = _calibrate(ff, txt, cal_box) if ff else (max(1, cal_box[3] - cal_box[1]), 0.8)
-        geometry = None
-        try:
-            geometry = _text_geometry(l)
-        except (AttributeError, KeyError, TypeError, ValueError):
-            pass
         if _supports_arch(geometry):
             tr = geometry["transform"]
             size_px = max(4, round(_design_size(l) * geometry["vertical_scale"]))
@@ -405,6 +433,7 @@ def analyze(psd_path):
             "color": list(color), "justify": just,
             "box": box, "size_px": size_px, "top_frac": round(top_frac, 4),
             "arc": arc, "track": track, "hscale": round(hscale, 4), "effects": _effects(l),
+            "fill_opacity": _fill_opacity(l),        # 0 = ruột rỗng (chỉ viền/effect)
             "clip_layers": _clip_names(l),          # pattern mask vào chữ (nếu có)
             "pattern": bool(_clip_names(l)),         # cờ cho UI + save; save đổi thành tên file texture
             "text_geometry": geometry,
@@ -498,7 +527,7 @@ def _bake_bases(psd_path, exclude_names, bg_name=None):
     def bake(pred):
         psd = PSDImage.open(str(psd_path)); ls = list(psd.descendants())
         for i, l in enumerate(ls):
-            l.visible = pred(i, l)
+            l.visible = pred(i, l) and l.visible   # giữ trạng thái ẩn gốc: KHÔNG bật layer/group vốn ẩn
         return psd.composite(force=True).convert("RGBA")
     above = None
     if has_above:
@@ -854,7 +883,12 @@ def _draw_arch_field(img, f, tdir, value, override=None):
 def _draw_field(img, f, tdir, value, override=None):
     """Bọc quanh _draw_field_raw: nếu PSD nén ngang (HorizontalScale != 1) thì vẽ ở box nới
     rộng 1/hs rồi nén lại đúng hs -> chữ giữ đúng chiều cao thiết kế, không bị auto-shrink cả 2 chiều."""
-    if _supports_arch(f.get("text_geometry")):
+    g = f.get("text_geometry")
+    ang = _rotation_angle(g)
+    if ang is not None:                                 # chữ xoay (tay áo): vẽ ngang rồi xoay cụm
+        _draw_rotated_field(img, f, tdir, value, override, ang)
+        return
+    if _supports_arch(g):
         _draw_arch_field(img, f, tdir, value, override)
         return
     hs = float(f.get("hscale") or 1.0)
@@ -868,6 +902,32 @@ def _draw_field(img, f, tdir, value, override=None):
     work = Image.new("RGBA", img.size, (0, 0, 0, 0))
     _draw_field_raw(work, f2, tdir, value, override)
     img.alpha_composite(_hsqueeze(work, cx, hs))
+
+
+def _draw_rotated_field(img, f, tdir, value, override, angle):
+    """Vẽ chữ NGANG (đủ effect/viền) rồi xoay cả cụm -> đặt lại. Góc bất kỳ.
+    NEO theo ĐẦU chữ (ký tự đầu, phía sát art) chứ không phải tâm: tên ngắn vẫn sát art,
+    tên dài mọc ra XA theo chiều đọc nên không đè art (vd tay áo có Stitch phía trên)."""
+    x0, y0, x1, y1 = f["box"]
+    cx0, cy0 = (x0 + x1) / 2, (y0 + y1) / 2               # tâm chữ GỐC
+    size = max(4, int(f["size_px"]))
+    W, H = img.size
+    work = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    f2 = {**f, "text_geometry": None, "arc": 0, "justify": "center",
+          "box": [0, H // 2 - size, W, H // 2 + size]}     # box rộng cả canvas -> không auto-shrink
+    _draw_field(work, f2, tdir, value, override)           # qua _draw_field để giữ luôn hscale
+    bbox = work.getbbox()
+    if not bbox:
+        return
+    rot = work.crop(bbox).rotate(-angle, resample=Image.BICUBIC, expand=True)
+    ax, ay = f["text_geometry"]["transform"][:2]          # trục x cục bộ = hướng đọc (đầu->cuối)
+    n = math.hypot(ax, ay) or 1.0
+    ux, uy = ax / n, ay / n
+    ext_o = abs(ux) * (x1 - x0) + abs(uy) * (y1 - y0)     # dài chữ GỐC theo hướng đọc
+    ext_n = abs(ux) * rot.width + abs(uy) * rot.height    # dài chữ MỚI
+    ncx = cx0 + (ext_n - ext_o) / 2 * ux                  # đầu chữ mới = đầu chữ gốc (cố định)
+    ncy = cy0 + (ext_n - ext_o) / 2 * uy
+    img.alpha_composite(rot, (int(round(ncx - rot.width / 2)), int(round(ncy - rot.height / 2))))
 
 
 def _draw_field_raw(img, f, tdir, value, override=None):
@@ -897,6 +957,7 @@ def _draw_field_raw(img, f, tdir, value, override=None):
         return
     fx = f.get("effects") or {}
     fill = oc or _rgba(fx.get("fill") or f["color"])
+    fo = int(f.get("fill_opacity", 255))            # PS Fill opacity: 0 = ruột rỗng, viền/effect giữ nguyên
     strokes = _strokes_of(fx)                       # [(w,rgba)] nhiều viền đồng tâm
     sw = strokes[0][0] if strokes else 0            # viền lớn nhất (cho shadow silhouette)
     scol = strokes[0][1] if strokes else _rgba((0, 0, 0))
@@ -942,13 +1003,15 @@ def _draw_field_raw(img, f, tdir, value, override=None):
 
     # ---- fast-path: fill đặc, không effect fill đặc biệt -> vẽ viền (nhiều lớp) + fill ----
     if not (grad or bev or insh or pat_img):
-        _draw_text_multi(img, ax, baseline, value, font, anchor[0], track_px, fill, strokes)
+        fpaint = fill[:3] + (fill[3] * fo // 255,) if fo < 255 and len(fill) == 4 else fill
+        _draw_text_multi(img, ax, baseline, value, font, anchor[0], track_px, fpaint, strokes)
         return
 
     # ---- fill nâng cao (gradient / bevel): cần alpha mask của chữ ----
     amask = Image.new("L", img.size, 0)
     _draw_tracked(ImageDraw.Draw(amask), ax, baseline, value, font, 255, anchor[0], track_px)
     bbox = amask.getbbox()
+    amask_fill = amask.point(lambda p: p * fo // 255) if fo < 255 else amask   # fill mờ theo Fill opacity (viền/insh giữ nguyên)
     # 3. stroke (nhiều viền đồng tâm) vẽ TRƯỚC fill để nằm dưới
     if strokes:
         st = Image.new("RGBA", img.size, (0, 0, 0, 0))
@@ -961,7 +1024,7 @@ def _draw_field_raw(img, f, tdir, value, override=None):
         pat = pat_img.resize((bbox[2] - bbox[0], bbox[3] - bbox[1]))
         fi = Image.new("RGBA", img.size, (0, 0, 0, 0))
         fi.paste(pat, (bbox[0], bbox[1]))
-        fi.putalpha(amask)
+        fi.putalpha(amask_fill)
         img.alpha_composite(fi)
     else:
         if bev:
@@ -971,7 +1034,7 @@ def _draw_field_raw(img, f, tdir, value, override=None):
         else:
             rgb = None
         if rgb is not None:
-            fi = Image.fromarray(rgb, "RGB").convert("RGBA"); fi.putalpha(amask)
+            fi = Image.fromarray(rgb, "RGB").convert("RGBA"); fi.putalpha(amask_fill)
             img.alpha_composite(fi)
     # 5. inner shadow (bóng tối bên trong chữ)
     if insh:
