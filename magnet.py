@@ -485,7 +485,10 @@ def _inpaint(patch):
     rgb = patch[..., :3]; known = patch[..., 3] > 76      # ~0.3*255
     if known.sum() < 10:
         return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
-    imgf = Image.fromarray(np.where(known[..., None], rgb, 0).astype(np.uint8))
+    # SEED gap bằng màu TRUNG BÌNH (không phải đen): font script mảnh -> gap lớn blur không lan
+    # tới -> tên MỚI đè vùng đen thành loang lổ. Mean-fill đảm bảo gap = màu chữ, không đen.
+    mean = rgb[known].mean(0)
+    imgf = Image.fromarray(np.where(known[..., None], rgb, mean).astype(np.uint8))
     wf = Image.fromarray((known * 255).astype(np.uint8))
     for _ in range(40):                                   # lặp: blur rồi giữ pixel gốc -> lấp dần lỗ
         ib = np.asarray(imgf.filter(ImageFilter.GaussianBlur(6))).astype(np.float32)
@@ -498,13 +501,36 @@ def _inpaint(patch):
 
 
 def _extract_pattern(psd_path, text_name, clip_names, bbox):
-    """Composite chỉ text+clip -> pattern∩chữ, cắt theo bbox chữ, lấp lỗ -> texture RGB để tô tên mới."""
+    """Texture RGB (kín bbox chữ) để tô tên MỚI. Hai đường:
+    - clip toàn layer PIXEL (vd 'hood' marble): lấy RAW pixel phủ ĐẦY bbox -> texture kín,
+      chi tiết y gốc, tên mới nào cũng tô đủ (không còn lỗ/loang).
+    - clip có adjustment (vd Hue/Saturation NVH152): không có raw pixel -> composite text∩clip
+      rồi inpaint mean-fill (recolor text, gradient mượt vẫn khớp cho tên mới)."""
     psd = PSDImage.open(str(psd_path))
-    keep = {text_name, *clip_names}
+    x0, y0, x1, y1 = [int(v) for v in bbox]
+    clips = [l for l in psd.descendants() if l.name in clip_names]
+    pix = [l for l in clips if l.kind == "pixel"]
+    if clips and len(pix) == len(clips):            # toàn pixel -> texture ĐẦY từ raw
+        txt = next((l for l in psd.descendants() if l.name == text_name), None)
+        base = np.zeros((y1 - y0, x1 - x0, 3), np.float32)
+        base[:] = np.array((_style(txt)[2][:3] if txt else (255, 255, 255)), np.float32)  # nền = màu fill text
+        for l in pix:                               # descendants(): dưới -> trên
+            la = np.asarray(l.numpy())
+            la = la * 255 if la.dtype != np.uint8 else la.astype(np.float32)
+            lx0, ly0, lx1, ly1 = [int(v) for v in l.bbox]
+            ix0, iy0, ix1, iy1 = max(x0, lx0), max(y0, ly0), min(x1, lx1), min(y1, ly1)
+            if ix0 >= ix1 or iy0 >= iy1:
+                continue
+            sub = la[iy0 - ly0:iy1 - ly0, ix0 - lx0:ix1 - lx0].astype(np.float32)
+            rgb = sub[..., :3]
+            a = sub[..., 3:4] / 255.0 if sub.shape[2] >= 4 else np.ones(sub.shape[:2] + (1,), np.float32)
+            dst = base[iy0 - y0:iy1 - y0, ix0 - x0:ix1 - x0]
+            base[iy0 - y0:iy1 - y0, ix0 - x0:ix1 - x0] = rgb * a + dst * (1 - a)
+        return Image.fromarray(np.clip(base, 0, 255).astype(np.uint8))
+    keep = {text_name, *clip_names}                 # fallback: có adjustment -> composite + inpaint
     for l in psd.descendants():
         l.visible = l.name in keep
     arr = np.asarray(psd.composite(force=True).convert("RGBA"))
-    x0, y0, x1, y1 = [int(v) for v in bbox]
     return _inpaint(arr[y0:y1, x0:x1].astype(np.float32))
 
 
@@ -918,6 +944,10 @@ def _draw_rotated_field(img, f, tdir, value, override, angle):
     work = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     f2 = {**f, "text_geometry": None, "arc": 0, "justify": "center",
           "box": [0, H // 2 - size, W, H // 2 + size]}     # box rộng cả canvas -> không auto-shrink
+    if f.get("pattern") and not _hex(override):            # pattern trích theo bbox XOAY -> xoay về ngang
+        pp = tdir / f["pattern"]                            # để sau khi xoay cả cụm -(angle) thì pattern khớp gốc
+        if pp.is_file():
+            f2["_pattern_img"] = Image.open(pp).convert("RGBA").rotate(angle, resample=Image.BICUBIC, expand=True)
     _draw_field(work, f2, tdir, value, override)           # qua _draw_field để giữ luôn hscale
     bbox = work.getbbox()
     if not bbox:
@@ -970,10 +1000,13 @@ def _draw_field_raw(img, f, tdir, value, override=None):
     baseline = y0 + f["top_frac"] * size
     grad, bev, glow, insh = fx.get("gradient"), fx.get("bevel"), fx.get("glow"), fx.get("inner_shadow")
     pat_img = None                                  # texture "pattern mask vào text" (clip mask trong PSD)
-    if f.get("pattern") and not oc:
-        pp = tdir / f["pattern"]
-        if pp.is_file():
-            pat_img = Image.open(pp).convert("RGBA")
+    if not oc:
+        if f.get("_pattern_img") is not None:       # ảnh pattern nạp sẵn (đã xoay cho chữ xoay)
+            pat_img = f["_pattern_img"]
+        elif f.get("pattern"):
+            pp = tdir / f["pattern"]
+            if pp.is_file():
+                pat_img = Image.open(pp).convert("RGBA")
     if oc:                                          # ép màu chữ đặc theo mã nhập; giữ viền/bóng/glow
         grad = bev = insh = None
 

@@ -317,6 +317,12 @@ def collect_tool_gaps(psd):
                     gaps.append(f"{nm}: EFFECT {en} CHƯA HỖ TRỢ")
         except Exception:
             pass
+        try:                                            # pattern/texture clip vào chữ (layer riêng clip)
+            clip = [c.name for c in (getattr(l, "clip_layers", None) or [])]
+            if clip:
+                gaps.append(f"{nm}: PATTERN clip vào chữ {clip} (tool DỰNG được — trích texture; tên MỚI là XẤP XỈ, soi lại)")
+        except Exception:
+            pass
         try:
             sd = l.engine_dict["StyleRun"]["RunArray"][0]["StyleSheet"]["StyleSheetData"]
             for k, neu in _STYLE_NEUTRAL.items():
