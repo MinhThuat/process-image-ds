@@ -1,0 +1,13 @@
+# Thư viện Python cho Flat Studio (magnet tool).
+# Cài: pip install -r requirements.txt
+# psd-tools[composite] BẮT BUỘC extra -> kéo scikit-image + aggdraw + scipy
+# để render layer EFFECT (stroke/shadow/glow) lúc composite; thiếu sẽ lỗi
+# "Layer effects require: scikit-image".
+aiohttp>=3.9
+pillow
+numpy
+opencv-python-headless
+scipy
+openai>=1.0
+python-dotenv
+psd-tools[composite]
