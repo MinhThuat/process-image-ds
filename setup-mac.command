@@ -56,7 +56,7 @@ PY="$(command -v python3 || true)"
 echo "== 2. Moi truong Python (.venv) + thu vien =="
 "$PY" -m venv .venv || { echo "!! Tao .venv that bai"; read -r -p "Enter..."; exit 1; }
 ./.venv/bin/pip install --upgrade pip >/dev/null
-./.venv/bin/pip install "aiohttp>=3.9" pillow numpy opencv-python-headless scipy "openai>=1.0" python-dotenv "psd-tools[composite]" \
+./.venv/bin/pip install "aiohttp>=3.9" pillow numpy opencv-python-headless scipy "openai>=1.0" python-dotenv "psd-tools[composite]" certifi \
   || { echo "!! pip install that bai"; read -r -p "Enter..."; exit 1; }
 
 # ---- 4. codex (npm global) ----

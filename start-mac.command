@@ -12,6 +12,11 @@ PORT="${1:-8770}"
 PY=./.venv/bin/python
 [ -x "$PY" ] || PY=python3                       # chua chay setup-mac thi thu python3 he thong
 
+# Python tu python.org (Mac Intel) khong doc keychain -> urllib loi CERTIFICATE_VERIFY_FAILED.
+# Tro SSL sang CA bundle cua certifi (ap dung ca tien trinh con: chatgpt-imagegen, openart...).
+CA="$("$PY" -c 'import certifi; print(certifi.where())' 2>/dev/null)"
+[ -n "$CA" ] && export SSL_CERT_FILE="$CA" REQUESTS_CA_BUNDLE="$CA"
+
 # Tu cap nhat code tu git remote moi 60s (bash native tren Mac) — chi khi la git repo.
 if [ -f autoupdate.sh ] && command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
   bash autoupdate.sh "$(pwd)" >/dev/null 2>&1 &

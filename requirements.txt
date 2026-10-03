@@ -11,3 +11,4 @@ scipy
 openai>=1.0
 python-dotenv
 psd-tools[composite]
+certifi
