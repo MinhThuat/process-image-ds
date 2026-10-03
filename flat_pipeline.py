@@ -55,6 +55,32 @@ from PIL import Image, ImageDraw
 from scipy import ndimage
 
 HERE = Path(__file__).resolve().parent
+
+def _mac_ca_bundle():
+    """macOS: Python python.org không đọc Keychain -> urllib (chatgpt-imagegen) lỗi
+    CERTIFICATE_VERIFY_FAILED. Gộp CA của Keychain hệ thống (gồm cả cert proxy/antivirus
+    công ty) + certifi thành 1 file, set SSL_CERT_FILE cho mọi tiến trình con."""
+    if sys.platform != "darwin":
+        return
+    pem = ""
+    for kc in ("/System/Library/Keychains/SystemRootCertificates.keychain",
+               "/Library/Keychains/System.keychain"):
+        try:
+            pem += subprocess.run(["security", "find-certificate", "-a", "-p", kc],
+                                  capture_output=True, text=True, timeout=30).stdout
+        except Exception:
+            pass
+    try:
+        import certifi
+        pem += Path(certifi.where()).read_text()
+    except Exception:
+        pass
+    if "BEGIN CERTIFICATE" in pem:
+        f = Path(tempfile.gettempdir()) / "dsds_ca_bundle.pem"
+        f.write_text(pem)
+        os.environ["SSL_CERT_FILE"] = os.environ["REQUESTS_CA_BUNDLE"] = str(f)
+_mac_ca_bundle()
+
 ASSETS = HERE / "assets"
 VSC = Path(os.getenv("VSC_ROOT", "/mnt/6C96C1A096C16AE2/vsc"))
 # ưu tiên .env cạnh script (self-contained), không có thì dùng .env gốc của chatgpt-api
