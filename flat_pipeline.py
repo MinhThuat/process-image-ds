@@ -197,6 +197,35 @@ def _vision_uri(img, maxside=VISION_MAXSIDE):
     im.convert("RGB").save(buf, "JPEG", quality=85)
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
+_CIG = None
+def _codex_vision(content, timeout=240):
+    """Vision dự phòng: GPT qua endpoint Codex của chatgpt-imagegen (dùng lại auth `codex login`,
+    không tool vẽ) -> trả text. `content` = định dạng chat của ARK."""
+    global _CIG
+    if _CIG is None:
+        import importlib.machinery, importlib.util
+        ld = importlib.machinery.SourceFileLoader("chatgpt_imagegen", CHATGPT_BIN)
+        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(ld.name, ld))
+        ld.exec_module(mod)
+        _CIG = mod                          # gán SAU khi nạp xong: luồng song song không thấy module dở
+    access, account, _ = _CIG._extract_access_token(_CIG._load_auth())
+    if not access:
+        raise RuntimeError("codex chưa đăng nhập")
+    # ponytail: không tự refresh token hết hạn; bước gen (chatgpt-imagegen) tự refresh rồi lần sau chạy được
+    parts = [{"type": "input_image", "image_url": c["image_url"]["url"]} if c["type"] == "image_url"
+             else {"type": "input_text", "text": c["text"]} for c in content]
+    body = {"model": os.getenv("CHATGPT_IMAGEGEN_MODEL", "gpt-5.6-sol"), "stream": True,
+            "instructions": "You are an image generation assistant.",   # endpoint chỉ nhận instructions allowlist
+            "input": [{"type": "message", "role": "user", "content": parts}],
+            "store": False, "reasoning": {"effort": "low"}, "text": {"verbosity": "low"}}
+    headers = _CIG._build_headers(access, account, _CIG._detect_codex_version())
+    for ev in _CIG._stream(_CIG.CODEX_BACKEND, headers, body, time.monotonic() + timeout, 120):
+        if ev.get("type") == "response.output_text.done":
+            return ev.get("text", "")
+        if ev.get("type") in ("response.failed", "response.incomplete", "error"):
+            raise RuntimeError(f"codex: {str(ev)[:120]}")
+    return ""
+
 def _vision(client, img, prompt, need=()):
     """Gọi vision với fallback qua VMODELS, log từng lần thử. `need` = key bắt buộc trong JSON.
     `img` là 1 đường dẫn HOẶC list nhiều đường dẫn (gộp vào 1 request — ARK serialize
@@ -206,12 +235,21 @@ def _vision(client, img, prompt, need=()):
     for i in imgs:
         content.append({"type": "image_url", "image_url": {"url": _vision_uri(i)}})
     last = None
-    for m in VMODELS:
+    for m in ["codex"] + VMODELS:          # codex (GPT) nhanh ~3x; dola fallback
         try:
             log("vision", f"thử model {m} ...")
-            r = client.chat.completions.create(model=m,
-                messages=[{"role": "user", "content": content}])
-            js = json.loads(re.search(r"\{.*\}", r.choices[0].message.content, re.S).group())
+            if m == "codex":
+                txt, fin = _codex_vision(content), "stop"
+            else:
+                r = client.chat.completions.create(model=m,
+                    messages=[{"role": "user", "content": content}])
+                txt, fin = r.choices[0].message.content or "", r.choices[0].finish_reason
+            if fin == "content_filter":
+                raise ValueError("BytePlus chặn ảnh (content_filter: ảnh/hình in nhạy cảm)")
+            hit = re.search(r"\{.*\}", txt, re.S)
+            if not hit:
+                raise ValueError(f"model không trả JSON (finish={fin}): {txt[:60]!r}")
+            js = json.loads(hit.group())
             for k in need:
                 if k not in js:
                     raise ValueError(f"thiếu key '{k}'")
@@ -232,7 +270,8 @@ PEOPLE_PROMPT = (
 def seed_people(client, img):
     w, h = Image.open(img).size
     js, m = _vision(client, img, PEOPLE_PROMPT, need=("people",))
-    return js["people"], (w, h), m
+    # ảnh chỉ có đồ (không người) -> codex trả [] -> coi cả ảnh là 1 trang phục
+    return js["people"] or [[0, 0, 1000, 1000]], (w, h), m
 
 # --- vision: PIECES = phân loại đồ + tả print từng mảnh (mọi phần đều trước/sau) ---
 _PIECES_SCHEMA = (
